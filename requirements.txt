@@ -1,0 +1,8 @@
+normflows
+h5py
+matplotlib
+numpy
+torchvision
+tqdm
+pytorch-lightning
+wandb

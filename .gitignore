@@ -1,0 +1,5 @@
+venv/
+wandb/
+*.pyc/
+__pycache__/
+*.ckpt
