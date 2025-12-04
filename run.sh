@@ -3,8 +3,10 @@
 #PBS -l select=4:ncpus=192:ngpus=8:mpiprocs=8
 #PBS -l walltime=12:00:00
 #PBS -j oe
+#PBS -k oed
+#PBS -o job.log
 #PBS -q rt_HF
-#PBS -p gah51684
+#PBS -P gah51684
 
 
 cd $PBS_O_WORKDIR
@@ -15,6 +17,14 @@ NUM_WORKERS=32
 STRATEGY="ddp"
 NUM_NODES=4
 DEVICES_PER_NODE=8
+
+source venv/bin/activate
+
+cat $SGE_JOB_HOSTLIST > ./hostfile
+HOST=${HOSTNAME:0:5}
+
+module load openmpi
+module load nccl/2.5/2.5.6-1
 
 # ---- ホストリストの取得 ----
 # PBS_NODEFILE に割り当てノードが列挙されている
@@ -31,12 +41,7 @@ echo "NNODES: $nnodes"
 echo "WORLD_SIZE: $world_size"
 
 # ---- PyTorch distributed 実行 ----
-torchrun \
-    --nnodes=$nnodes \
-    --nproc_per_node=$gpus_per_node \
-    --node_rank=$PBS_NODENUM \
-    --master_addr=$master_addr \
-    --master_port=29500 \
+mpirun --hostfile ./hostfile -np $NHOSTS \
     clnf.py \
         $CKPT_PREDICTOR \
         --batch_size $BATCH_SIZE \
