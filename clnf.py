@@ -49,6 +49,7 @@ def main(args):
     # LightningModule化
     pl_model = CLNFModule(
         sample_num=args.sample_num,
+        lr=args.lr,
         # ckpt_autoencoder=args.ckpt_autoencoder,
         ckpt_predictor=args.ckpt_predictor,
         # num_bases=args.num_bases
@@ -102,6 +103,7 @@ if __name__ == "__main__":
     parser.add_argument('ckpt_predictor', type=str, help='Path to pretrained predictor checkpoint')
     parser.add_argument('--num_bases', type=int, default=64, help='Number of bases')
     parser.add_argument('--batch_size', type=int, default=1000, help='Batch size')
+    parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--max_steps', type=int, default=120000, help='Max training steps')
     parser.add_argument('--val_interval', type=int, default=50, help='Validation interval in steps')
     parser.add_argument('--sample_num', type=int, default=64, help='Number of generated images per validation')
