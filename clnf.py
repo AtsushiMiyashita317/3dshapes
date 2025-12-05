@@ -36,12 +36,12 @@ def main(args):
     images = dataset['images'][:]
     n_samples = images.shape[0]
 
-    # データ分割（8:2）
+    # データ分割（1:5）
     indices = np.arange(n_samples)
     np.random.seed(42)
     np.random.shuffle(indices)
-    split = int(n_samples * 0.8)
-    train_idx, val_idx = indices[:split], indices[split:]
+    split = int(n_samples / 6)
+    val_idx, train_idx = indices[:split], indices[split:]
     
     # Set up model
     torch.manual_seed(0)
@@ -76,12 +76,18 @@ def main(args):
         verbose=True
     )
 
+    if args.backend is not None:
+        from pytorch_lightning.strategies import DDPStrategy
+        strategy = DDPStrategy(process_group_backend=args.backend, find_unused_parameters=True)
+    else:
+        strategy = args.strategy
+
     # Trainer
     trainer = Trainer(
         max_steps=args.max_steps,
         devices=args.devices,
         num_nodes=args.num_nodes,
-        strategy=args.strategy,
+        strategy=strategy,
         check_val_every_n_epoch=args.val_interval,
         logger=wandb_logger,
         callbacks=[checkpoint_callback],
@@ -104,6 +110,7 @@ if __name__ == "__main__":
     parser.add_argument('--ckpt_dir', type=str, default='checkpoints/clnf', help='Checkpoint directory')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     parser.add_argument('--strategy', type=str, default='auto', help='Distributed training strategy (ddp, ddp_spawn, etc)')
+    parser.add_argument('--backend', type=str, default=None, help='Distributed backend (nccl, gloo, etc)')
     parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes for distributed training')
     parser.add_argument('--devices', type=str, default='auto', help='Number of devices (GPUs/CPUs) per node')
     args = parser.parse_args()
