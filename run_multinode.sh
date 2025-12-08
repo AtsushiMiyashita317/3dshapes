@@ -1,10 +1,9 @@
 #!/bin/bash
 #PBS -N pl_ddp
-#PBS -l select=4
-#PBS -l walltime=12:00:00
+#PBS -l select=5
+#PBS -l walltime=24:00:00
 #PBS -j oe
 #PBS -k oed
-#PBS -o job.log
 #PBS -q rt_HF
 #PBS -P gah51684
 
@@ -12,11 +11,13 @@
 cd $PBS_O_WORKDIR
 
 ckpt_predictor="./checkpoints/predictor/best-epoch=732-val_loss=0.9436.ckpt"
-batch_size=1000
-num_workers=8
+batch_size=10000
+num_workers=1
 strategy="ddp"
 backend="nccl"
 gpus_per_node=8
+lr=0.01
+resume="./wandb/run-20251206_112844-mlazidl7/files/best-epoch=49-val_loss=97.8120.ckpt"
 
 source venv/bin/activate
 
@@ -46,3 +47,5 @@ mpirun --hostfile $PBS_NODEFILE -np $nnodes \
             --backend ${backend} \
             --num_nodes ${nnodes} \
             --devices ${gpus_per_node} \
+            --lr ${lr} \
+            --resume ${resume}

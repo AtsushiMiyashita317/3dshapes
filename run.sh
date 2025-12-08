@@ -4,7 +4,6 @@
 #PBS -l walltime=12:00:00
 #PBS -j oe
 #PBS -k oed
-#PBS -o job.log
 #PBS -q rt_HF
 #PBS -P gah51684
 
@@ -17,6 +16,7 @@ num_workers=8
 strategy="ddp"
 backend="nccl"
 gpus_per_node=8
+lr=0.0025
 
 source venv/bin/activate
 
@@ -34,4 +34,5 @@ torchrun \
         --num_workers ${num_workers} \
         --strategy ${strategy} \
         --backend ${backend} \
-        --devices ${gpus_per_node}
+        --devices ${gpus_per_node} \
+        --lr ${lr} \
