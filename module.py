@@ -432,6 +432,7 @@ class CLNF(torch.nn.Module):
         self, 
         ckpt_predictor,
         num_bases=64,
+        latent_dim=128,
         log_var_init=-5.0
     ):
         super().__init__()
@@ -439,8 +440,8 @@ class CLNF(torch.nn.Module):
         self.predictor = PredictorModule.load_from_checkpoint(ckpt_predictor).model.eval()
 
         num_layers = 12
-        input_dim = 128
-        hidden_dim = 128
+        input_dim = latent_dim
+        hidden_dim = latent_dim
         half_dim = input_dim // 2
 
         self.autoencoder = Autoencoder(input_dim)
@@ -583,6 +584,7 @@ class CLNFModule(pl.LightningModule):
         lr=1e-3,
         beta=10.0,
         sample_num=64,
+        latent_dim=128,
         log_eps_init=-2.0,
         log_eps_final=-6.0,
         eps_steps=5000,
@@ -590,6 +592,7 @@ class CLNFModule(pl.LightningModule):
         super().__init__()
         self.model = CLNF(
             ckpt_predictor,
+            latent_dim=latent_dim,
         )
         self.sample_num = sample_num
 

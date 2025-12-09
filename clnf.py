@@ -52,6 +52,7 @@ def main(args):
         lr=args.lr,
         # ckpt_autoencoder=args.ckpt_autoencoder,
         ckpt_predictor=args.ckpt_predictor,
+        latent_dim=args.latent_dim,
         # num_bases=args.num_bases
     )
 
@@ -103,6 +104,7 @@ if __name__ == "__main__":
     # parser.add_argument('ckpt_autoencoder', type=str, help='Path to pretrained autoencoder checkpoint')
     parser.add_argument('ckpt_predictor', type=str, help='Path to pretrained predictor checkpoint')
     parser.add_argument('--num_bases', type=int, default=64, help='Number of bases')
+    parser.add_argument('--latent_dim', type=int, default=128, help='Latent dimension of autoencoder')
     parser.add_argument('--batch_size', type=int, default=1000, help='Batch size')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--max_epochs', type=int, default=5000, help='Max training steps')

@@ -16,7 +16,7 @@ num_workers=8
 strategy="ddp"
 backend="nccl"
 gpus_per_node=8
-lr=0.0025
+lr=0.009
 
 source venv/bin/activate
 
