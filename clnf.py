@@ -69,8 +69,8 @@ def main(args):
     # ModelCheckpointコールバック
     checkpoint_callback = ModelCheckpoint(
         dirpath=wandb_logger.experiment.dir if type(wandb_logger.experiment.dir) is str else args.ckpt_dir,
-        filename="best-{epoch:02d}-{val_loss:.4f}",
-        monitor="val_loss",
+        filename="best-{epoch:02d}-{val_nll:.4f}",
+        monitor="val_nll",
         save_top_k=1,
         save_last=True,
         mode="min",
