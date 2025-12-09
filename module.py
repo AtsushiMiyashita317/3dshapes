@@ -430,7 +430,7 @@ class CLNF(torch.nn.Module):
     def __init__(
         self, 
         ckpt_predictor,
-        num_bases=16,
+        num_bases=64,
         log_var_init=-5.0
     ):
         super().__init__()
@@ -458,17 +458,6 @@ class CLNF(torch.nn.Module):
 
         self.flow = nf.NormalizingFlow(base, flows)
 
-        self.log_var_net = torch.nn.Sequential(
-            torch.nn.Linear(input_dim, input_dim),
-            torch.nn.Softplus(),
-            torch.nn.LayerNorm(input_dim),
-            torch.nn.Linear(input_dim, input_dim),
-            torch.nn.Softplus(),
-            torch.nn.LayerNorm(input_dim),
-            torch.nn.Linear(input_dim, num_bases)
-        )
-        self.log_var_init = log_var_init
-
         self.W = torch.nn.Parameter(torch.randn(num_bases, input_dim, input_dim) * (1.0 / math.sqrt(input_dim)))
 
         def _forward(y: torch.Tensor):
@@ -480,12 +469,12 @@ class CLNF(torch.nn.Module):
 
         self.jacobian_fn = torch.func.vmap(torch.func.jacrev(_forward))
 
-        self.register_buffer('eps', torch.tensor(1e-2))
+        self.register_buffer('eps_p', torch.tensor(1e-3))
+        self.register_buffer('eps_q', torch.tensor(1e-3))
 
     def parameters(self, recurse = True):
         yield from self.flow.parameters(recurse)
         yield from self.autoencoder.parameters(recurse)
-        yield from self.log_var_net.parameters(recurse)
         yield self.W
 
     def encode(self, x):
@@ -498,14 +487,14 @@ class CLNF(torch.nn.Module):
         z = z.reshape(z.size(0), -1, 1, 1)
         x = self.autoencoder.decode(z)
         return x
-    
-    def pushforward_tangent(self, z: torch.Tensor, v: torch.Tensor):
+
+    def pullback_tangent(self, z: torch.Tensor, v: torch.Tensor):
         """
         Args:
             z: (batch_size, input_dim)
-            v: (batch_size, num_bases, input_dim)
+            v: (batch_size, output_dim, input_dim)
         Returns:
-            J: (batch_size, num_bases, input_dim)
+            J: (batch_size, output_dim, input_dim)
         """
         def _forward_flow(z: torch.Tensor):
             z = z.unsqueeze(0)
@@ -515,46 +504,46 @@ class CLNF(torch.nn.Module):
         def _forward_single(z: torch.Tensor, v: torch.Tensor):
             # z: (input_dim,)
             # v: (num_bases, input_dim)
-            def _forward_single_v(v: torch.Tensor):
-                # v: (input_dim,)
-                return torch.func.jvp(_forward_flow, (z,), (v,))[1]
-            J = torch.func.vmap(_forward_single_v)(v)  # (num_bases, input_dim)
-            return J
+            J = torch.func.vmap(torch.func.vjp(_forward_flow, z)[1])(v)  # (num_bases, input_dim)
+            return J[0]
         J = torch.func.vmap(_forward_single)(z, v)  # (batch_size, num_bases, input_dim)
         return J
-    
-    def kl_divergence(self, J_p: torch.Tensor, J_q: torch.Tensor, var_diag: torch.Tensor):
+
+    def kl_divergence(self, J_p: torch.Tensor, J_q: torch.Tensor):
         """
         Args:
             J_p: (batch_size, output_dim, input_dim)
             J_q: (batch_size, num_bases, input_dim)
-            var_diag: (batch_size, num_bases)
         Returns:
             kl: (batch_size,)
         """
+
+        input_dim = J_p.size(-1)
         output_dim = J_p.size(-2)
         num_bases = J_q.size(-2)
 
-        S_p = torch.einsum('bni,bmi->bnm', J_p, J_p)                                # (batch_size, output_dim, output_dim)
-        S_q = torch.einsum('bni,bmi->bnm', J_q, J_q)                                # (batch_size, num_bases, num_bases)
-        S_pq = torch.einsum('bni,bmi->bnm', J_p, J_q)                               # (batch_size, output_dim, num_bases)
+        S_p = torch.einsum('bni,bmi->bnm', J_p, J_p)                # (batch_size, output_dim, output_dim)
+        S_q = torch.einsum('bni,bmi->bnm', J_q, J_q)                # (batch_size, num_bases, num_bases)
+        S_pq = torch.einsum('bni,bmi->bnm', J_p, J_q)               # (batch_size, output_dim, num_bases)
 
-        I_p = torch.eye(output_dim, device=J_p.device)                              # (output_dim, output_dim)
-        I_q = torch.eye(num_bases, device=J_q.device)                               # (num_bases, num_bases)
-        M = S_p + self.eps * I_p                                                    # (batch_size, output_dim, output_dim)
-        M_inv = torch.linalg.inv(M)                                                 # (batch_size, output_dim, output_dim)
-        H = torch.einsum('bi,bij->bij', var_diag, S_q) + self.eps * I_q             # (batch_size, num_bases, num_bases)
+        I_p = torch.eye(output_dim, device=J_p.device)              # (output_dim, output_dim)
+        I_q = torch.eye(num_bases, device=J_q.device)               # (num_bases, num_bases)
+        M = S_p + self.eps_p * I_p                                  # (batch_size, output_dim, output_dim)
+        H = S_q + self.eps_q * I_q                                  # (batch_size, num_bases, num_bases)
 
-        trace_pp = torch.einsum('bij,bji->b', M_inv, S_p)                           # (batch_size,)
-        trace_qq = torch.einsum('bi,bii->b', var_diag, S_q)                         # (batch_size,)
-        trace_pq = torch.einsum('bi,bji,bjk,bki->b', var_diag, S_pq, M_inv, S_pq)   # (batch_size,)
-        trace = (trace_qq - trace_pq) / self.eps - trace_pp
+        trace_pp = torch.einsum('bij->b', S_p)                      # (batch_size,)
+        trace_qq = torch.einsum('bij->b', S_q)                      # (batch_size,)
+        trace_pq = torch.einsum('bij,bij->b', S_pq, S_pq)           # (batch_size,)
+        trace = self.eps_p * self.eps_q * input_dim \
+              + self.eps_q * trace_pp \
+              + self.eps_p * trace_qq \
+              + trace_pq                                            # (batch_size,)
 
-        logdet_p = torch.logdet(M) - output_dim * self.eps.log()                    # (batch_size,)
-        logdet_q = torch.logdet(H) - num_bases * self.eps.log()                     # (batch_size,)
-        logdet = logdet_p - logdet_q
+        logdet_p = torch.logdet(M) + (input_dim - output_dim) * self.eps_p.log()  # (batch_size,)
+        logdet_q = torch.logdet(H) + (input_dim - num_bases) * self.eps_q.log()   # (batch_size,)
+        logdet = -(logdet_p + logdet_q)
 
-        kl = 0.5 * (trace + logdet)
+        kl = 0.5 * (trace + logdet - input_dim)
 
         return kl
 
@@ -572,14 +561,14 @@ class CLNF(torch.nn.Module):
         y = y.detach().reshape(y.size(0), -1)
         log_prob = self.flow.log_prob(y)
 
-        J_p = self.jacobian_fn(y.detach())  # (B, output_dim, input_dim)
-
         z = self.flow.inverse(y)
-        v = torch.einsum('bi,mji->bmj', z, self.W)  # (B, num_bases, input_dim)
-        J_q = self.pushforward_tangent(z, v)  # (B, num_bases, input_dim)
-        var_diag = torch.exp(self.log_var_net(z) + self.log_var_init)  # (B, num_bases)
 
-        kl = self.kl_divergence(J_p, J_q, var_diag)  # (B,)
+        J_p = self.jacobian_fn(y)  # (B, output_dim, input_dim)
+        J_p = self.pullback_tangent(z, J_p.detach())  # (B, output_dim, input_dim)
+
+        J_q = torch.einsum('bi,mji->bmj', z, self.W)  # (B, num_bases, input_dim)
+
+        kl = self.kl_divergence(J_p, J_q)  # (B,)
 
         return x_recon, log_prob, kl
 
@@ -604,20 +593,20 @@ class CLNFModule(pl.LightningModule):
         self.lr = lr
         self.beta = beta
 
-        self.log_eps_init = log_eps_init
-        self.log_eps_final = log_eps_final
-        self.eps_steps = eps_steps
-        self.model.eps.data.fill_(10 ** self.log_eps_init)
+        # self.log_eps_init = log_eps_init
+        # self.log_eps_final = log_eps_final
+        # self.eps_steps = eps_steps
+        # self.model.eps.data.fill_(10 ** self.log_eps_init)
         
     def forward(self, x):
         return self.model(x)
     
-    def on_train_epoch_end(self):
-        # 線形スケジューリング例（他のスケジューラも可）
-        progress = min(self.current_epoch / max(1, self.eps_steps), 1.0)
-        new_value = self.log_eps_init + (self.log_eps_final - self.log_eps_init) * progress
-        self.model.eps.data.fill_(10 ** new_value)
-        self.log('eps', self.model.eps, on_epoch=True, prog_bar=True)
+    # def on_train_epoch_end(self):
+    #     # 線形スケジューリング例（他のスケジューラも可）
+    #     progress = min(self.current_epoch / max(1, self.eps_steps), 1.0)
+    #     new_value = self.log_eps_init + (self.log_eps_final - self.log_eps_init) * progress
+    #     self.model.eps.data.fill_(10 ** new_value)
+    #     self.log('eps', self.model.eps, on_epoch=True, prog_bar=True)
     
     def on_validation_epoch_end(self):
         # 検証終了時に画像生成しwandbに記録

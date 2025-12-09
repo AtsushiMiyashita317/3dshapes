@@ -66,23 +66,17 @@ def main(args):
     # wandb logger
     wandb_logger = WandbLogger(project=args.project)
 
-    if type(wandb_logger.experiment.dir) is str:
-        print("wandb_logger.experiment.dir:", wandb_logger.experiment.dir)
-
-        # ModelCheckpointコールバック
-        checkpoint_callback = ModelCheckpoint(
-            dirpath=wandb_logger.experiment.dir,
-            filename="best-{epoch:02d}-{val_loss:.4f}",
-            monitor="val_loss",
-            save_top_k=1,
-            save_last=True,
-            mode="min",
-            save_weights_only=False,
-            verbose=True
-        )
-        callbacks = [checkpoint_callback]
-    else:
-        callbacks = None
+    # ModelCheckpointコールバック
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=wandb_logger.experiment.dir if type(wandb_logger.experiment.dir) is str else args.ckpt_dir,
+        filename="best-{epoch:02d}-{val_loss:.4f}",
+        monitor="val_loss",
+        save_top_k=1,
+        save_last=True,
+        mode="min",
+        save_weights_only=False,
+        verbose=True
+    )
 
     if args.backend is not None:
         from pytorch_lightning.strategies import DDPStrategy
@@ -98,7 +92,7 @@ def main(args):
         strategy=strategy,
         check_val_every_n_epoch=args.val_interval,
         logger=wandb_logger,
-        callbacks=callbacks,
+        callbacks=[checkpoint_callback],
         enable_checkpointing=True
     )
     trainer.fit(pl_model, train_loader, val_loader, ckpt_path=args.resume)
