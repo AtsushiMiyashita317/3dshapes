@@ -462,6 +462,16 @@ class CLNF(torch.nn.Module):
 
         self.W = torch.nn.Parameter(torch.randn(num_bases, input_dim, input_dim) * (1.0 / math.sqrt(input_dim)))
 
+        self.log_var_net = torch.nn.Sequential(
+            torch.nn.Linear(input_dim, input_dim),
+            torch.nn.Softplus(),
+            torch.nn.LayerNorm(input_dim),
+            torch.nn.Linear(input_dim, input_dim),
+            torch.nn.Softplus(),
+            torch.nn.LayerNorm(input_dim),
+            torch.nn.Linear(input_dim, input_dim)
+        )
+
         def _forward(y: torch.Tensor):
             y = y.reshape(1, -1, 1, 1)
             x = self.autoencoder.decode(y)
@@ -477,6 +487,7 @@ class CLNF(torch.nn.Module):
     def parameters(self, recurse = True):
         yield from self.flow.parameters(recurse)
         yield from self.autoencoder.parameters(recurse)
+        yield from self.log_var_net.parameters(recurse)
         yield self.W
 
     def encode(self, x):
@@ -511,11 +522,12 @@ class CLNF(torch.nn.Module):
         J = torch.func.vmap(_forward_single)(z, v)  # (batch_size, num_bases, input_dim)
         return J
 
-    def kl_divergence(self, J_p: torch.Tensor, J_q: torch.Tensor):
+    def kl_divergence(self, J_p: torch.Tensor, J_q: torch.Tensor, log_var: torch.Tensor):
         """
         Args:
             J_p: (batch_size, output_dim, input_dim)
             J_q: (batch_size, num_bases, input_dim)
+            log_var: (batch_size, input_dim)
         Returns:
             kl: (batch_size,)
         """
@@ -526,25 +538,25 @@ class CLNF(torch.nn.Module):
 
         J_p = J_p * 10
 
-        S_p = torch.einsum('bni,bmi->bnm', J_p, J_p)                # (batch_size, output_dim, output_dim)
-        S_q = torch.einsum('bni,bmi->bnm', J_q, J_q)                # (batch_size, num_bases, num_bases)
-        S_pq = torch.einsum('bni,bmi->bnm', J_p, J_q)               # (batch_size, output_dim, num_bases)
+        S_p = torch.einsum('bni,bmi->bnm', J_p, J_p)                            # (batch_size, output_dim, output_dim)
+        DS_q = torch.einsum('bni,bmi,bi->bnm', J_q, J_q, log_var.neg().exp())   # (batch_size, num_bases, num_bases)
+        S_pq = torch.einsum('bni,bmi->bnm', J_p, J_q)                           # (batch_size, output_dim, num_bases)
 
-        I_p = torch.eye(output_dim, device=J_p.device)              # (output_dim, output_dim)
-        I_q = torch.eye(num_bases, device=J_q.device)               # (num_bases, num_bases)
-        M = S_p + self.eps_p * I_p                                  # (batch_size, output_dim, output_dim)
-        H = S_q + self.eps_q * I_q                                  # (batch_size, num_bases, num_bases)
+        I_p = torch.eye(output_dim, device=J_p.device)                          # (output_dim, output_dim)
+        I_q = torch.eye(num_bases, device=J_p.device)                           # (num_bases, num_bases)
+        M = S_p + self.eps_p * I_p                                              # (batch_size, output_dim, output_dim)
+        H = DS_q + I_q                                                          # (batch_size, num_bases, num_bases)
 
-        trace_pp = torch.einsum('bij->b', S_p)                      # (batch_size,)
-        trace_qq = torch.einsum('bij->b', S_q)                      # (batch_size,)
-        trace_pq = torch.einsum('bij,bij->b', S_pq, S_pq)           # (batch_size,)
-        trace = self.eps_p * self.eps_q * input_dim \
-              + self.eps_q * trace_pp \
+        trace_pp = torch.einsum('bni,bmi,bi->b', J_p, J_p, log_var.exp())       # (batch_size,)
+        trace_qq = torch.einsum('bni,bmi->b', J_q, J_q)                         # (batch_size,)
+        trace_pq = torch.einsum('bij,bij->b', S_pq, S_pq)                       # (batch_size,)
+        trace = self.eps_p * log_var.exp().sum(-1) \
+              + trace_pp \
               + self.eps_p * trace_qq \
-              + trace_pq                                            # (batch_size,)
+              + trace_pq                                                        # (batch_size,)
 
-        logdet_p = torch.logdet(M) + (input_dim - output_dim) * self.eps_p.log()  # (batch_size,)
-        logdet_q = torch.logdet(H) + (input_dim - num_bases) * self.eps_q.log()   # (batch_size,)
+        logdet_p = torch.logdet(M) + (input_dim - output_dim) * self.eps_p.log()# (batch_size,)
+        logdet_q = torch.logdet(H) + log_var.sum(-1)                            # (batch_size,)
         logdet = -(logdet_p + logdet_q)
 
         kl = 0.5 * (trace + logdet - input_dim)
@@ -567,12 +579,13 @@ class CLNF(torch.nn.Module):
 
         z = self.flow.inverse(y)
 
+        log_var = self.log_var_net(z)  # (B, input_dim)
         J_p = self.jacobian_fn(y)  # (B, output_dim, input_dim)
         J_p = self.pullback_tangent(z, J_p.detach())  # (B, output_dim, input_dim)
 
         J_q = torch.einsum('bi,mji->bmj', z, self.W)  # (B, num_bases, input_dim)
 
-        kl = self.kl_divergence(J_p, J_q)  # (B,)
+        kl = self.kl_divergence(J_p, J_q, log_var)  # (B,)
 
         return x_recon, log_prob, kl
 
