@@ -53,7 +53,7 @@ def main(args):
         # ckpt_autoencoder=args.ckpt_autoencoder,
         ckpt_predictor=args.ckpt_predictor,
         latent_dim=args.latent_dim,
-        # num_bases=args.num_bases
+        num_bases=args.num_bases
     )
 
     # DataLoader

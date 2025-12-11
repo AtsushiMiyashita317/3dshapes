@@ -535,8 +535,8 @@ class CLNF(torch.nn.Module):
         M = S_p + self.eps_p * I_p                                  # (batch_size, output_dim, output_dim)
         H = S_q + self.eps_q * I_q                                  # (batch_size, num_bases, num_bases)
 
-        trace_pp = torch.einsum('bij->b', S_p)                      # (batch_size,)
-        trace_qq = torch.einsum('bij->b', S_q)                      # (batch_size,)
+        trace_pp = torch.einsum('bii->b', S_p)                      # (batch_size,)
+        trace_qq = torch.einsum('bii->b', S_q)                      # (batch_size,)
         trace_pq = torch.einsum('bij,bij->b', S_pq, S_pq)           # (batch_size,)
         trace = self.eps_p * self.eps_q * input_dim \
               + self.eps_q * trace_pp \
@@ -570,7 +570,7 @@ class CLNF(torch.nn.Module):
         J_p = self.jacobian_fn(y)  # (B, output_dim, input_dim)
         J_p = self.pullback_tangent(z, J_p.detach())  # (B, output_dim, input_dim)
 
-        J_q = torch.einsum('bi,mji->bmj', z, self.W)  # (B, num_bases, input_dim)
+        J_q = torch.einsum('bi,mji->bmj', z, self.W - self.W.mT)  # (B, num_bases, input_dim)
 
         kl = self.kl_divergence(J_p, J_q)  # (B,)
 
@@ -585,6 +585,7 @@ class CLNFModule(pl.LightningModule):
         beta=10.0,
         sample_num=64,
         latent_dim=128,
+        num_bases=64,
         log_eps_init=-2.0,
         log_eps_final=-6.0,
         eps_steps=5000,
@@ -592,6 +593,7 @@ class CLNFModule(pl.LightningModule):
         super().__init__()
         self.model = CLNF(
             ckpt_predictor,
+            num_bases=num_bases,
             latent_dim=latent_dim,
         )
         self.sample_num = sample_num
