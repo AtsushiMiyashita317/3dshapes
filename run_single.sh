@@ -15,7 +15,7 @@ batch_size=5000
 num_workers=4
 lr=0.002
 latent_dim=192
-num_bases=128
+num_bases=192
 
 source venv/bin/activate
 
