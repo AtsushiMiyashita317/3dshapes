@@ -30,12 +30,18 @@ class Autoencoder(torch.nn.Module):
             torch.nn.Conv2d(3*64, 3*32, kernel_size=1),
             torch.nn.Softplus(),
             torch.nn.LayerNorm([3*32, 1, 1]),
-            torch.nn.Conv2d(3*32, latent_dim, kernel_size=1),
+            torch.nn.Conv2d(3*32, 3*16, kernel_size=1),
+            torch.nn.Softplus(),
+            torch.nn.LayerNorm([3*16, 1, 1]),
+            torch.nn.Conv2d(3*16, latent_dim, kernel_size=1),
             torch.nn.LayerNorm([latent_dim, 1, 1]),
         )
 
         self.decoder = torch.nn.Sequential(
-            torch.nn.ConvTranspose2d(latent_dim, 3*32, kernel_size=1),
+            torch.nn.ConvTranspose2d(latent_dim, 3*16, kernel_size=1),
+            torch.nn.Softplus(),
+            torch.nn.LayerNorm([3*16, 1, 1]),
+            torch.nn.ConvTranspose2d(3*16, 3*32, kernel_size=1),
             torch.nn.Softplus(),
             torch.nn.LayerNorm([3*32, 1, 1]),
             torch.nn.ConvTranspose2d(3*32, 3*64, kernel_size=1),
