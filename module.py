@@ -473,6 +473,17 @@ class VectorField(torch.nn.Module):
         for i in range(num_layers):
             self.time_embedding.append(FourierFeature(hidden_dim, scale=1.0))
 
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.input_layer.reset_parameters()
+        for layer in self.hidden_layers:
+            for module in layer:
+                if hasattr(module, 'reset_parameters'):
+                    module.reset_parameters()
+        torch.nn.init.zeros_(self.output_layer.weight)
+        torch.nn.init.zeros_(self.output_layer.bias)
+
     def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         h = self.input_layer.forward(x)
         for layer, time_emb in zip(self.hidden_layers, self.time_embedding):
