@@ -1,9 +1,11 @@
+from typing import Tuple
 import torch
 import pytorch_lightning as pl
 import torchvision as tv
 import wandb
 import normflows as nf
 import math
+from torchdiffeq import odeint_adjoint as odeint
 
 class Autoencoder(torch.nn.Module):
     def __init__(self, latent_dim=128):
@@ -443,6 +445,64 @@ class NFModule(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adamax(list(self.autoencoder.parameters()) + list(self.flow.parameters()), lr=1e-3, weight_decay=1e-5)
         return optimizer
+    
+
+class FourierFeature(torch.nn.Module):
+    def __init__(self, input_dim, scale=10.0):
+        super().__init__()
+        self.register_buffer('w', torch.randn(input_dim) * scale)
+        self.register_buffer('b', torch.rand(input_dim) * scale)
+
+    def forward(self, t: torch.Tensor):
+        return torch.sin(t * self.w + self.b)
+    
+
+class VectorField(torch.nn.Module):
+    def __init__(self, input_dim, hidden_dim=128, num_layers=4):
+        super().__init__()
+        self.input_layer = torch.nn.Linear(input_dim, hidden_dim)
+        self.output_layer = torch.nn.Linear(hidden_dim, input_dim)
+        self.hidden_layers = torch.nn.ModuleList()
+        for i in range(num_layers):
+            self.hidden_layers.append(torch.nn.Sequential(
+                torch.nn.Softplus(),
+                torch.nn.LayerNorm(hidden_dim),
+                torch.nn.Linear(hidden_dim, hidden_dim),
+            ))
+        self.time_embedding = torch.nn.ModuleList()
+        for i in range(num_layers):
+            self.time_embedding.append(FourierFeature(hidden_dim, scale=1.0))
+
+    def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        h = self.input_layer.forward(x)
+        for layer, time_emb in zip(self.hidden_layers, self.time_embedding):
+            h = h + time_emb.forward(t)
+            h = layer.forward(h)
+        out = self.output_layer.forward(h)
+        return out
+
+
+class CotangentBundleVectorField(torch.nn.Module):
+    def __init__(self, input_dim, hidden_dim=128, num_layers=4):
+        super().__init__()
+        self.vector_field = VectorField(input_dim, hidden_dim, num_layers)
+
+    def forward(self, t: torch.Tensor, x: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+        p, w = x
+
+        def _forward_vf(p: torch.Tensor):
+            p = p.unsqueeze(0)
+            dp = self.vector_field.forward(t, p)
+            return dp.squeeze(0)
+
+        def forward_single(p: torch.Tensor, w: torch.Tensor):
+            dp, vjp_func = torch.func.vjp(_forward_vf, p)
+            dw = -vjp_func(w)[0]
+            return dp, dw
+
+        dp, dw = torch.func.vmap(forward_single)(p, w)
+        dx = (dp, dw)
+        return dx
 
 
 class CLNF(torch.nn.Module):
@@ -457,53 +517,48 @@ class CLNF(torch.nn.Module):
 
         self.predictor = PredictorModule.load_from_checkpoint(ckpt_predictor).model.eval()
 
-        num_layers = 12
+        num_layers = 4
         input_dim = latent_dim
         hidden_dim = latent_dim
-        half_dim = input_dim // 2
 
         self.autoencoder = Autoencoder(input_dim)
 
-        base = nf.distributions.base.DiagGaussian(input_dim, trainable=False)
+        self.base = nf.distributions.base.DiagGaussian(input_dim, trainable=False)
 
-        flows = []
-        for i in range(num_layers):
-            # Neural network with two hidden layers having 64 units each
-            # Last layer is initialized by zeros making training more stable
-            param_map = nf.nets.MLP([half_dim, hidden_dim, hidden_dim, input_dim], init_zeros=True)
-            # Add flow layer
-            flows.append(nf.flows.AffineCouplingBlock(param_map))
-            # Swap dimensions
-            flows.append(nf.flows.Permute(input_dim, mode='swap'))
-
-        self.flow = nf.NormalizingFlow(base, flows)
+        self.vf = CotangentBundleVectorField(input_dim, hidden_dim=hidden_dim, num_layers=num_layers)
 
         self.W = torch.nn.Parameter(torch.randn(num_bases, input_dim, input_dim) * (1.0 / math.sqrt(input_dim)))
-
-        def _forward(y: torch.Tensor):
-            y = y.reshape(1, -1, 1, 1)
-            x = self.autoencoder.decode(y)
-            _, scale, shape, _ = self.predictor.forward(x)
-            y = torch.cat([scale, shape], dim=-1).squeeze(0)
-            return y
-
-        self.jacobian_fn = torch.func.vmap(torch.func.jacrev(_forward))
 
         self.register_buffer('eps_p', torch.tensor(1e-3))
         self.register_buffer('eps_q', torch.tensor(1e-1))
 
     def parameters(self, recurse = True):
-        yield from self.flow.parameters(recurse)
+        yield from self.vf.parameters(recurse)
         yield from self.autoencoder.parameters(recurse)
         yield self.W
+
+    def flow_forward(self, z):
+        t = torch.tensor([0.0, 1.0], device=z.device)
+        y = odeint(self.vf.vector_field, z, t, method='dopri5')
+        return y[-1]
+    
+    def flow_inverse(self, y):
+        t = torch.tensor([1.0, 0.0], device=y.device)
+        z = odeint(self.vf.vector_field, y, t, method='dopri5')
+        return z[-1]
+    
+    def flow_inverse_with_cotangent(self, y, v):
+        t = torch.tensor([1.0, 0.0], device=y.device)
+        z, w = odeint(self.vf, (y, v), t, method='dopri5')
+        return z[-1], w[-1]
 
     def encode(self, x):
         z = self.autoencoder.encode(x)
         z = z.reshape(z.size(0), -1)
-        return self.flow.inverse(z)
+        return self.flow_inverse(z)
 
     def decode(self, z):
-        z = self.flow.forward(z)
+        z = self.flow_forward(z)
         z = z.reshape(z.size(0), -1, 1, 1)
         x = self.autoencoder.decode(z)
         return x
@@ -561,7 +616,7 @@ class CLNF(torch.nn.Module):
         """
         def _forward_flow(z: torch.Tensor):
             z = z.unsqueeze(0)
-            y = self.flow.forward(z)
+            y = self.flow_forward(z)
             return y.squeeze(0)
         
         def _forward_single(z: torch.Tensor, v: torch.Tensor):
@@ -612,24 +667,24 @@ class CLNF(torch.nn.Module):
 
         return kl
 
-    def log_prob(self, cv: torch.Tensor, J_q: torch.Tensor):
+    def log_prob(self, w: torch.Tensor, J_q: torch.Tensor):
         """
         Args:
-            cv: (batch_size, input_dim)
+            w: (batch_size, input_dim)
             J_q: (batch_size, num_bases, input_dim)
         Returns:
             log_prob: (batch_size,)
         """
 
-        input_dim = cv.size(-1)
+        input_dim = w.size(-1)
 
-        cv = cv * (3**0.5)
+        w = w * (3**0.5)
 
         S = torch.einsum('bin,bim->bnm', J_q, J_q)                # (batch_size, input_dim, input_dim)
         I = torch.eye(input_dim, device=J_q.device)               # (input_dim, input_dim)
         H = S + self.eps_q * I                                  # (batch_size, input_dim, input_dim)
 
-        sum_sq = torch.einsum('bi,bij,bj->b', cv, H, cv)          # (batch_size,)
+        sum_sq = torch.einsum('bi,bij,bj->b', w, H, w)          # (batch_size,)
 
         logdet_q = torch.logdet(H)
 
@@ -640,7 +695,8 @@ class CLNF(torch.nn.Module):
 
     @torch.no_grad()
     def sample(self, num_samples):
-        z = self.flow.sample(num_samples)[0]
+        z = self.base.sample(num_samples)
+        z = self.flow_forward(z)
         z = z.reshape(num_samples, -1, 1, 1)
         x = self.autoencoder.decode(z)
         return x
@@ -650,19 +706,17 @@ class CLNF(torch.nn.Module):
         x_recon = self.autoencoder.decode(y)
 
         y = y.detach().reshape(y.size(0), -1)
+        v = self.sample_cotangent(y)  # (B, output_dim)
+        v = v.detach()
 
-        z = self.flow.inverse(y)
-        log_prob_y = self.flow.q0.log_prob(z)
-
-        cv = self.sample_cotangent(y)  # (B, output_dim)
-        cv = cv.detach()
-        cv = self.pullback_cotangent(z, cv)  # (B, input_dim)
+        z, w = self.flow_inverse_with_cotangent(y, v)  # (B, input_dim), (B, input_dim)
 
         J_q = torch.einsum('bi,mji->bmj', z, self.W - self.W.mT)  # (B, num_bases, input_dim)
 
-        log_prob_cv = self.log_prob(cv, J_q)  # (B,)
+        log_prob_z = self.base.log_prob(z)
+        log_prob_w = self.log_prob(w, J_q)  # (B,)
 
-        return x_recon, log_prob_y, log_prob_cv
+        return x_recon, log_prob_z, log_prob_w
 
 
 class CLNFModule(pl.LightningModule):
