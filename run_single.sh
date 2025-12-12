@@ -11,10 +11,10 @@
 cd $PBS_O_WORKDIR
 
 ckpt_predictor="./checkpoints/predictor/best-epoch=732-val_loss=0.9436.ckpt"
-batch_size=5000
+batch_size=10000
 num_workers=4
-lr=0.002
-latent_dim=192
+lr=0.003
+latent_dim=48
 num_bases=192
 
 source venv/bin/activate
