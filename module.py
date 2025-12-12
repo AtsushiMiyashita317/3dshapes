@@ -542,7 +542,7 @@ class CLNF(torch.nn.Module):
         output_dim = J_p.size(-2)
         num_bases = J_q.size(-2)
 
-        J_p = J_p * 10
+        J_p = J_p * 3
 
         S_p = torch.einsum('bni,bmi->bnm', J_p, J_p)                # (batch_size, output_dim, output_dim)
         S_q = torch.einsum('bni,bmi->bnm', J_q, J_q)                # (batch_size, num_bases, num_bases)

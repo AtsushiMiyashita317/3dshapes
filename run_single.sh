@@ -14,7 +14,7 @@ ckpt_predictor="./checkpoints/predictor/best-epoch=732-val_loss=0.9436.ckpt"
 batch_size=10000
 num_workers=4
 lr=0.003
-latent_dim=48
+latent_dim=24
 num_bases=192
 
 source venv/bin/activate
