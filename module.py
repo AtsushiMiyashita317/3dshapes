@@ -507,6 +507,49 @@ class CLNF(torch.nn.Module):
         z = z.reshape(z.size(0), -1, 1, 1)
         x = self.autoencoder.decode(z)
         return x
+    
+    def _predict(self, y: torch.Tensor):
+        # y: (input_dim,)
+        # Returns: (output_dim,)
+        y = y.reshape(1, -1, 1, 1)
+        x = self.autoencoder.decode(y)
+        _, scale, shape, _ = self.predictor.forward(x)
+        out = torch.cat([scale, shape], dim=-1).squeeze(0)
+        return out
+
+    def sample_cotangent(self, y: torch.Tensor):
+        def _sample_cotangent_single(y: torch.Tensor, cv: torch.Tensor):
+            # y: (input_dim,)
+            # cv: (output_dim,)
+            # Returns: (input_dim,)
+
+            _, vjp_fn = torch.func.vjp(self._predict, y)
+
+            cv = vjp_fn(cv)[0]
+
+            return cv
+
+        batch_size = y.size(0)
+        cv = torch.randn(batch_size, 5, device=y.device)
+        cv = torch.func.vmap(_sample_cotangent_single)(y, cv)
+        cv = cv + self.eps_p * torch.randn_like(cv)
+
+        return cv
+
+    def pullback_cotangent(self, z: torch.Tensor, cv: torch.Tensor):
+        def _pullback_cotangent_single(z: torch.Tensor, cv: torch.Tensor):
+            z = z.unsqueeze(0)
+            cv = cv.unsqueeze(0)
+
+            _, vjp_fn = torch.func.vjp(self.flow.forward, z)
+
+            cv = vjp_fn(cv)[0]
+
+            return cv.squeeze(0)
+
+        cv = torch.func.vmap(_pullback_cotangent_single)(z, cv)
+
+        return cv
 
     def pullback_tangent(self, z: torch.Tensor, v: torch.Tensor):
         """
@@ -569,6 +612,32 @@ class CLNF(torch.nn.Module):
 
         return kl
 
+    def log_prob(self, cv: torch.Tensor, J_q: torch.Tensor):
+        """
+        Args:
+            cv: (batch_size, input_dim)
+            J_q: (batch_size, num_bases, input_dim)
+        Returns:
+            log_prob: (batch_size,)
+        """
+
+        input_dim = cv.size(-1)
+
+        cv = cv * (3**0.5)
+
+        S = torch.einsum('bin,bim->bnm', J_q, J_q)                # (batch_size, input_dim, input_dim)
+        I = torch.eye(input_dim, device=J_q.device)               # (input_dim, input_dim)
+        H = S + self.eps_q * I                                  # (batch_size, input_dim, input_dim)
+
+        sum_sq = torch.einsum('bi,bij,bj->b', cv, H, cv)          # (batch_size,)
+
+        logdet_q = torch.logdet(H)
+
+        log_prob = 0.5 * (logdet_q - sum_sq)
+
+        return log_prob
+
+
     @torch.no_grad()
     def sample(self, num_samples):
         z = self.flow.sample(num_samples)[0]
@@ -581,18 +650,19 @@ class CLNF(torch.nn.Module):
         x_recon = self.autoencoder.decode(y)
 
         y = y.detach().reshape(y.size(0), -1)
-        log_prob = self.flow.log_prob(y)
 
         z = self.flow.inverse(y)
+        log_prob_y = self.flow.q0.log_prob(z)
 
-        J_p = self.jacobian_fn(y)  # (B, output_dim, input_dim)
-        J_p = self.pullback_tangent(z, J_p.detach())  # (B, output_dim, input_dim)
+        cv = self.sample_cotangent(y)  # (B, output_dim)
+        cv = cv.detach()
+        cv = self.pullback_cotangent(z, cv)  # (B, input_dim)
 
         J_q = torch.einsum('bi,mji->bmj', z, self.W - self.W.mT)  # (B, num_bases, input_dim)
 
-        kl = self.kl_divergence(J_p, J_q)  # (B,)
+        log_prob_cv = self.log_prob(cv, J_q)  # (B,)
 
-        return x_recon, log_prob, kl
+        return x_recon, log_prob_y, log_prob_cv
 
 
 class CLNFModule(pl.LightningModule):
@@ -638,31 +708,31 @@ class CLNFModule(pl.LightningModule):
                 wandb_logger.experiment.log({f"val_generated/sample": wandb.Image(grid, caption=f"epoch {self.current_epoch}")})
 
     def training_step(self, batch, batch_idx):
-        recon, log_prob, kl = self.model.forward(batch)
-        log_prob = log_prob.mean()
-        kl = kl.mean()
-        nll_loss = kl - log_prob
+        recon, log_prob_y, log_prob_cv = self.model.forward(batch)
+        log_prob_y = log_prob_y.mean()
+        log_prob_cv = log_prob_cv.mean()
+        nll_loss = - (log_prob_y + log_prob_cv)
         recon_loss = torch.nn.functional.mse_loss(recon, batch)
         loss = nll_loss + self.beta * recon_loss
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log('train_log_prob', log_prob, on_step=True, on_epoch=True, prog_bar=False)
+        self.log('train_log_prob_y', log_prob_y, on_step=True, on_epoch=True, prog_bar=False)
+        self.log('train_log_prob_cv', log_prob_cv, on_step=True, on_epoch=True, prog_bar=False)
         self.log('train_recon_loss', recon_loss, on_step=True, on_epoch=True, prog_bar=False)
         self.log('train_nll', nll_loss, on_step=True, on_epoch=True, prog_bar=False)
-        self.log('train_kl', kl, on_step=True, on_epoch=True, prog_bar=False)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        recon, log_prob, kl = self.model.forward(batch)
-        log_prob = log_prob.mean()
-        kl = kl.mean()
-        nll_loss = kl - log_prob
+        recon, log_prob_y, log_prob_cv = self.model.forward(batch)
+        log_prob_y = log_prob_y.mean()
+        log_prob_cv = log_prob_cv.mean()
+        nll_loss = - (log_prob_y + log_prob_cv)
         recon_loss = torch.nn.functional.mse_loss(recon, batch)
         loss = nll_loss + self.beta * recon_loss
         self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val_log_prob', log_prob, on_step=False, on_epoch=True, prog_bar=False)
+        self.log('val_log_prob_y', log_prob_y, on_step=False, on_epoch=True, prog_bar=False)
+        self.log('val_log_prob_cv', log_prob_cv, on_step=False, on_epoch=True, prog_bar=False)
         self.log('val_recon_loss', recon_loss, on_step=False, on_epoch=True, prog_bar=False)
         self.log('val_nll', nll_loss, on_step=False, on_epoch=True, prog_bar=False)
-        self.log('val_kl', kl, on_step=False, on_epoch=True, prog_bar=False)
         return loss
     
 
