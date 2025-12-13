@@ -457,9 +457,9 @@ class CLNF(torch.nn.Module):
 
         self.predictor = PredictorModule.load_from_checkpoint(ckpt_predictor).model.eval()
 
-        num_layers = 12
+        num_layers = 24
         input_dim = latent_dim
-        hidden_dim = latent_dim
+        hidden_dim = 192
         half_dim = input_dim // 2
 
         self.autoencoder = Autoencoder(input_dim)
@@ -667,16 +667,16 @@ class CLNFModule(pl.LightningModule):
     
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adamax(self.model.parameters(), lr=self.lr, weight_decay=1e-5)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.3)
+        optimizer = torch.optim.Adamax(self.model.parameters(), lr=self.lr, weight_decay=3e-5)
+        # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.3)
 
         return {
             'optimizer': optimizer,
-            'lr_scheduler': {
-                'scheduler': scheduler,
-                'interval': 'epoch',
-                'frequency': 1,
-            }
+            # 'lr_scheduler': {
+            #     'scheduler': scheduler,
+            #     'interval': 'epoch',
+            #     'frequency': 1,
+            # }
         }
 
 
