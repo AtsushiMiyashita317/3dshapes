@@ -545,24 +545,26 @@ class CLNF(torch.nn.Module):
         J_p = J_p * 3
 
         S_p = torch.einsum('bni,bmi->bnm', J_p, J_p)                # (batch_size, output_dim, output_dim)
-        S_q = torch.einsum('bni,bmi->bnm', J_q, J_q)                # (batch_size, num_bases, num_bases)
+        S_q = torch.einsum('bin,bim->bnm', J_q, J_q)                # (batch_size, input_dim, input_dim)
         S_pq = torch.einsum('bni,bmi->bnm', J_p, J_q)               # (batch_size, output_dim, num_bases)
 
         I_p = torch.eye(output_dim, device=J_p.device)              # (output_dim, output_dim)
-        I_q = torch.eye(num_bases, device=J_q.device)               # (num_bases, num_bases)
+        I_q = torch.eye(input_dim, device=J_q.device)               # (num_bases, num_bases)
         M = S_p + self.eps_p * I_p                                  # (batch_size, output_dim, output_dim)
         H = S_q + self.eps_q * I_q                                  # (batch_size, num_bases, num_bases)
 
         trace_pp = torch.einsum('bii->b', S_p)                      # (batch_size,)
-        trace_qq = torch.einsum('bii->b', S_q)                      # (batch_size,)
+        trace_qq = torch.einsum('bij,bij->b', J_q, J_q)             # (batch_size,)
         trace_pq = torch.einsum('bij,bij->b', S_pq, S_pq)           # (batch_size,)
         trace = self.eps_p * self.eps_q * input_dim \
               + self.eps_q * trace_pp \
               + self.eps_p * trace_qq \
               + trace_pq                                            # (batch_size,)
 
-        logdet_p = torch.logdet(M) + (input_dim - output_dim) * self.eps_p.log()  # (batch_size,)
-        logdet_q = torch.logdet(H) + (input_dim - num_bases) * self.eps_q.log()   # (batch_size,)
+        _, logdet_M = torch.slogdet(M)                              # (batch_size,)
+        _, logdet_H = torch.slogdet(H)                              # (batch_size,)
+        logdet_p = logdet_M + (input_dim - output_dim) * self.eps_p.log()  # (batch_size,)
+        logdet_q = logdet_H                                               # (batch_size,)
         logdet = -(logdet_p + logdet_q)
 
         kl = 0.5 * (trace + logdet - input_dim)
