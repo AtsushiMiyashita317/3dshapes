@@ -496,7 +496,7 @@ class CLNF(torch.nn.Module):
         self.jacobian_fn = torch.func.vmap(torch.func.jacrev(_forward))
 
         self.register_buffer('eps_p', torch.tensor(1e-3))
-        self.register_buffer('eps_q', torch.tensor(1e-1))
+        self.register_buffer('eps_q', torch.tensor(1e-0))
 
     def parameters(self, recurse = True):
         yield from self.flow.parameters(recurse)
@@ -675,7 +675,7 @@ class CLNFModule(pl.LightningModule):
     
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adamax(self.model.parameters(), lr=self.lr, weight_decay=3e-5)
+        optimizer = torch.optim.Adamax(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
         # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.3)
 
         return {
