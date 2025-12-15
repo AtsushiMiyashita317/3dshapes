@@ -510,8 +510,8 @@ class CLNF(torch.nn.Module):
         self.jacobian_fn = torch.func.vmap(torch.func.jacrev(_forward))
 
         self.gate = torch.nn.Parameter(torch.randn(latent_dim))
-        self.log_var_null = torch.nn.Parameter(torch.tensor(log_var_init))
-        self.log_var_image = torch.nn.Parameter(torch.tensor(log_var_init))
+        self.register_buffer('precision_null', torch.tensor(100.0))
+        self.register_buffer('precision_image', torch.tensor(0.01))
 
         self.register_buffer('eps_p', torch.tensor(eps_p))
         self.register_buffer('eps_q', torch.tensor(eps_q))
@@ -521,8 +521,6 @@ class CLNF(torch.nn.Module):
         yield from self.autoencoder.parameters(recurse)
         yield self.W
         yield self.gate
-        yield self.log_var_null
-        yield self.log_var_image
 
     def encode(self, x):
         z = self.autoencoder.encode(x)
@@ -627,8 +625,8 @@ class CLNF(torch.nn.Module):
         S = torch.einsum('bin,bim->bnm', J, J)                              # (batch_size, input_dim, input_dim)
         M_sym = S + self.eps_q * I * sym_gate                               # (batch_size, input_dim, input_dim)
 
-        M_null = self.log_var_null.neg().exp() * I * null_gate              # (input_dim, input_dim)
-        M_image = self.log_var_image.neg().exp() * I * sym_gate             # (input_dim, input_dim)
+        M_null = self.precision_null * I * null_gate              # (input_dim, input_dim)
+        M_image = self.precision_image * I * sym_gate             # (input_dim, input_dim)
 
         L_predictor = M_null + M_sym                                        # (batch_size, input_dim, input_dim)
         L_decoder = M_null + M_image                                        # (input_dim, input_dim)
