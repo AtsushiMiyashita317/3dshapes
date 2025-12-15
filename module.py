@@ -6,9 +6,9 @@ import normflows as nf
 import math
 
 class Autoencoder(torch.nn.Module):
-    def __init__(self, latent_dim=128):
+    def __init__(self, num_post_layers=3, latent_dim=12):
         super().__init__()
-        self.encoder = torch.nn.Sequential(
+        layers = [
             torch.nn.Conv2d(3, 3*2, kernel_size=2, stride=2),
             torch.nn.Softplus(),
             torch.nn.LayerNorm([3*2, 32, 32]),
@@ -27,24 +27,33 @@ class Autoencoder(torch.nn.Module):
             torch.nn.Conv2d(3*32, 3*64, kernel_size=2, stride=2),
             torch.nn.Softplus(),
             torch.nn.LayerNorm([3*64, 1, 1]),
-            torch.nn.Conv2d(3*64, 3*32, kernel_size=1),
-            torch.nn.Softplus(),
-            torch.nn.LayerNorm([3*32, 1, 1]),
-            torch.nn.Conv2d(3*32, 3*16, kernel_size=1),
-            torch.nn.Softplus(),
-            torch.nn.LayerNorm([3*16, 1, 1]),
-            torch.nn.Conv2d(3*16, latent_dim, kernel_size=1),
-            torch.nn.LayerNorm([latent_dim, 1, 1]),
-        )
+        ]
 
-        self.decoder = torch.nn.Sequential(
-            torch.nn.ConvTranspose2d(latent_dim, 3*16, kernel_size=1),
-            torch.nn.Softplus(),
-            torch.nn.LayerNorm([3*16, 1, 1]),
-            torch.nn.ConvTranspose2d(3*16, 3*32, kernel_size=1),
-            torch.nn.Softplus(),
-            torch.nn.LayerNorm([3*32, 1, 1]),
-            torch.nn.ConvTranspose2d(3*32, 3*64, kernel_size=1),
+        current_channels = 3*64
+        for _ in range(num_post_layers):
+            layers.extend([
+                torch.nn.Conv2d(current_channels, current_channels // 2, kernel_size=1),
+                torch.nn.Softplus(),
+                torch.nn.LayerNorm([current_channels // 2, 1, 1]),
+            ])
+            current_channels //= 2
+
+        layers.append(torch.nn.Conv2d(current_channels, latent_dim, kernel_size=1))
+
+        self.encoder = torch.nn.Sequential(*layers)
+
+        layers = []
+        layers.append(torch.nn.ConvTranspose2d(latent_dim, current_channels, kernel_size=1))
+
+        for _ in range(num_post_layers):
+            layers.extend([
+                torch.nn.Softplus(),
+                torch.nn.LayerNorm([current_channels, 1, 1]),
+                torch.nn.ConvTranspose2d(current_channels, current_channels * 2, kernel_size=1),
+            ])
+            current_channels *= 2
+
+        layers.extend([
             torch.nn.Softplus(),
             torch.nn.LayerNorm([3*64, 1, 1]),
             torch.nn.ConvTranspose2d(3*64, 3*32, kernel_size=2, stride=2),
@@ -64,7 +73,9 @@ class Autoencoder(torch.nn.Module):
             torch.nn.LayerNorm([3*2, 32, 32]),
             torch.nn.ConvTranspose2d(3*2, 3, kernel_size=2, stride=2),
             torch.nn.Sigmoid(),
-        )
+        ])
+
+        self.decoder = torch.nn.Sequential(*layers)
 
     def encode(self, x):
         return self.encoder(x)
@@ -122,115 +133,6 @@ class AutoencoderModule(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adamax(self.model.parameters(), lr=5e-3, weight_decay=1e-5)
         return optimizer
-
-
-# class Autoencoder(torch.nn.Module):
-#     def __init__(self, latent_dim=128):
-#         super().__init__()
-#         self.encoder = torch.nn.Sequential(
-#             torch.nn.Conv2d(3, 3*2, kernel_size=4, stride=2, padding=1),
-#             torch.nn.Softplus(),
-#             torch.nn.LayerNorm([3*2, 32, 32]),
-#             torch.nn.Conv2d(3*2, 3*4, kernel_size=4, stride=2, padding=1),
-#             torch.nn.Softplus(),
-#             torch.nn.LayerNorm([3*4, 16, 16]),
-#             torch.nn.Conv2d(3*4, 3*8, kernel_size=4, stride=2, padding=1),
-#             torch.nn.Softplus(),
-#             torch.nn.LayerNorm([3*8, 8, 8]),
-#             torch.nn.Conv2d(3*8, 3*16, kernel_size=4, stride=2, padding=1),
-#             torch.nn.Softplus(),
-#             torch.nn.LayerNorm([3*16, 4, 4]),
-#             torch.nn.Conv2d(3*16, 3*32, kernel_size=4, stride=2, padding=1),
-#             torch.nn.Softplus(),
-#             torch.nn.LayerNorm([3*32, 2, 2]),
-#             torch.nn.Conv2d(3*32, 3*64, kernel_size=2),
-#             torch.nn.Softplus(),
-#             torch.nn.LayerNorm([3*64, 1, 1]),
-#             torch.nn.Conv2d(3*64, latent_dim, kernel_size=1),
-#         )
-
-#         self.decoder = torch.nn.Sequential(
-#             torch.nn.ConvTranspose2d(latent_dim, 3*64, kernel_size=1),
-#             torch.nn.Softplus(),
-#             torch.nn.LayerNorm([3*64, 1, 1]),
-#             torch.nn.ConvTranspose2d(3*64, 3*32, kernel_size=2),
-#             torch.nn.Softplus(),
-#             torch.nn.LayerNorm([3*32, 2, 2]),
-#             torch.nn.ConvTranspose2d(3*32, 3*16, kernel_size=4, stride=2, padding=1),
-#             torch.nn.Softplus(),
-#             torch.nn.LayerNorm([3*16, 4, 4]),
-#             torch.nn.ConvTranspose2d(3*16, 3*8, kernel_size=4, stride=2, padding=1),
-#             torch.nn.Softplus(),
-#             torch.nn.LayerNorm([3*8, 8, 8]),
-#             torch.nn.ConvTranspose2d(3*8, 3*4, kernel_size=4, stride=2, padding=1),
-#             torch.nn.Softplus(),
-#             torch.nn.LayerNorm([3*4, 16, 16]),
-#             torch.nn.ConvTranspose2d(3*4, 3*2, kernel_size=4, stride=2, padding=1),
-#             torch.nn.Softplus(),
-#             torch.nn.LayerNorm([3*2, 32, 32]),
-#             torch.nn.ConvTranspose2d(3*2, 3, kernel_size=4, stride=2, padding=1),
-#             torch.nn.Sigmoid(),
-#         )
-
-#     def encode(self, x):
-#         z = self.encoder(x)
-#         return z
-
-#     def decode(self, z):
-#         z = self.decoder(z)
-#         return z
-
-#     def forward(self, x):
-#         z = self.encode(x)
-#         x_recon = self.decode(z)
-#         return z, x_recon
-
-
-# class AutoencoderModule(pl.LightningModule):
-#     def __init__(self, sample_num=64):
-#         super().__init__()
-#         self.model = Autoencoder()
-#         self.sample_num = sample_num
-#         self.recon_imgs = None
-        
-#     def on_validation_epoch_end(self):
-#         # 検証終了時に画像生成しwandbに記録
-#         if self.recon_imgs is None:
-#             return
-#         with torch.no_grad():
-#             img = self.recon_imgs[:self.sample_num]
-#             grid = tv.utils.make_grid(img.cpu(), nrow=8)
-#             wandb_logger = self.logger
-#             if hasattr(wandb_logger, "experiment"):
-#                 wandb_logger.experiment.log({f"val_generated/epoch_{self.current_epoch}": wandb.Image(grid, caption=f"epoch {self.current_epoch}")})
-#             self.recon_imgs = None
-
-#     def encode(self, x):
-#         return self.model.encode(x)
-
-#     def decode(self, z):
-#         return self.model.decode(z)
-
-#     def forward(self, x):
-#         return self.model(x)
-
-#     def training_step(self, batch, batch_idx):
-#         recon = self.model(batch)[1]
-#         loss = torch.nn.functional.mse_loss(recon, batch)
-#         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
-#         return loss
-
-#     def validation_step(self, batch, batch_idx):
-#         recon = self.model(batch)[1]
-#         if self.recon_imgs is None:
-#             self.recon_imgs = recon.clamp(0, 1).cpu()
-#         loss = torch.nn.functional.mse_loss(recon, batch)
-#         self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-#         return loss
-
-#     def configure_optimizers(self):
-#         optimizer = torch.optim.Adamax(self.model.parameters(), lr=5e-3, weight_decay=1e-5)
-#         return optimizer
 
 
 class Predictor(torch.nn.Module):
@@ -449,25 +351,32 @@ class CLNF(torch.nn.Module):
     def __init__(
         self, 
         ckpt_predictor,
-        num_bases=64,
-        latent_dim=128,
-        log_var_init=-5.0
+        num_bases=66,
+        latent_dim=12,
+        autoencoder_layers=3,
+        flow_layers=24,
+        flow_hidden_dim=192,
+        eps_p=1e-3,
+        eps_q=1e-1,
     ):
         super().__init__()
 
         self.predictor = PredictorModule.load_from_checkpoint(ckpt_predictor).model.eval()
 
-        num_layers = 24
+        self.latent_dim = latent_dim
+        self.num_bases = num_bases
+
+        self.autoencoder = Autoencoder(num_post_layers=autoencoder_layers, latent_dim=latent_dim)
+
         input_dim = latent_dim
-        hidden_dim = 192
+        hidden_dim = flow_hidden_dim
         half_dim = input_dim // 2
 
-        self.autoencoder = Autoencoder(input_dim)
 
         base = nf.distributions.base.DiagGaussian(input_dim, trainable=False)
 
         flows = []
-        for i in range(num_layers):
+        for i in range(flow_layers):
             # Neural network with two hidden layers having 64 units each
             # Last layer is initialized by zeros making training more stable
             param_map = nf.nets.MLP([half_dim, hidden_dim, hidden_dim, input_dim], init_zeros=True)
@@ -489,13 +398,16 @@ class CLNF(torch.nn.Module):
 
         self.jacobian_fn = torch.func.vmap(torch.func.jacrev(_forward))
 
-        self.register_buffer('eps_p', torch.tensor(1e-3))
-        self.register_buffer('eps_q', torch.tensor(1e-1))
+        self.log_var_diag = torch.nn.Parameter(torch.zeros(input_dim))
+
+        self.register_buffer('eps_p', torch.tensor(eps_p))
+        self.register_buffer('eps_q', torch.tensor(eps_q))
 
     def parameters(self, recurse = True):
         yield from self.flow.parameters(recurse)
         yield from self.autoencoder.parameters(recurse)
         yield self.W
+        yield self.log_var_diag
 
     def encode(self, x):
         z = self.autoencoder.encode(x)
@@ -540,31 +452,28 @@ class CLNF(torch.nn.Module):
 
         input_dim = J_p.size(-1)
         output_dim = J_p.size(-2)
-        num_bases = J_q.size(-2)
 
-        J_p = J_p * 3
+        J_p = J_p / J_p.square().sum().sqrt()
 
-        S_p = torch.einsum('bni,bmi->bnm', J_p, J_p)                # (batch_size, output_dim, output_dim)
-        S_q = torch.einsum('bin,bim->bnm', J_q, J_q)                # (batch_size, input_dim, input_dim)
-        S_pq = torch.einsum('bni,bmi->bnm', J_p, J_q)               # (batch_size, output_dim, num_bases)
+        S_p = torch.einsum('bni,bmi->bnm', J_p, J_p)                        # (batch_size, output_dim, output_dim)
+        S_q = torch.einsum('bin,bim->bnm', J_q, J_q)                        # (batch_size, input_dim, input_dim)
+        S_pq = torch.einsum('bni,bmi->bnm', J_p, J_q)                       # (batch_size, output_dim, num_bases)
+        D = self.log_var_diag.neg().exp()                                   # (input_dim,)
 
-        I_p = torch.eye(output_dim, device=J_p.device)              # (output_dim, output_dim)
-        I_q = torch.eye(input_dim, device=J_q.device)               # (num_bases, num_bases)
-        M = S_p + self.eps_p * I_p                                  # (batch_size, output_dim, output_dim)
-        H = S_q + self.eps_q * I_q                                  # (batch_size, num_bases, num_bases)
+        I_p = torch.eye(output_dim, device=J_p.device)                      # (output_dim, output_dim)
+        I_q = torch.eye(input_dim, device=J_q.device)                       # (input_dim, input_dim)
+        M = S_p + self.eps_p * I_p                                          # (batch_size, output_dim, output_dim)
+        H = S_q + D * I_q                                                   # (batch_size, input_dim, input_dim)
 
-        trace_pp = torch.einsum('bii->b', S_p)                      # (batch_size,)
-        trace_qq = torch.einsum('bij,bij->b', J_q, J_q)             # (batch_size,)
-        trace_pq = torch.einsum('bij,bij->b', S_pq, S_pq)           # (batch_size,)
-        trace = self.eps_p * self.eps_q * input_dim \
-              + self.eps_q * trace_pp \
-              + self.eps_p * trace_qq \
-              + trace_pq                                            # (batch_size,)
+        trace_p = torch.einsum('bij,bij,j->b', J_p, J_p, D)                 # (batch_size,)
+        trace_q = torch.einsum('bij,bij->b', J_q, J_q)                      # (batch_size,)
+        trace_pq = torch.einsum('bij,bij->b', S_pq, S_pq)                   # (batch_size,)
+        trace = self.eps_p * (D.sum() + trace_q) + trace_p + trace_pq       # (batch_size,)
 
-        _, logdet_M = torch.slogdet(M)                              # (batch_size,)
-        _, logdet_H = torch.slogdet(H)                              # (batch_size,)
-        logdet_p = logdet_M + (input_dim - output_dim) * self.eps_p.log()  # (batch_size,)
-        logdet_q = logdet_H                                               # (batch_size,)
+        _, logdet_M = torch.slogdet(M)                                      # (batch_size,)
+        _, logdet_H = torch.slogdet(H)                                      # (batch_size,)
+        logdet_p = logdet_M + (input_dim - output_dim) * self.eps_p.log()   # (batch_size,)
+        logdet_q = logdet_H                                                 # (batch_size,)
         logdet = -(logdet_p + logdet_q)
 
         kl = 0.5 * (trace + logdet - input_dim)
@@ -604,28 +513,30 @@ class CLNFModule(pl.LightningModule):
         lr=1e-3,
         beta=10.0,
         sample_num=64,
-        latent_dim=128,
-        num_bases=64,
-        log_eps_init=-2.0,
-        log_eps_final=-6.0,
-        eps_steps=5000,
+        num_bases=66,
+        latent_dim=12,
+        autoencoder_layers=3,
+        flow_layers=24,
+        flow_hidden_dim=192,
+        eps_p=1e-3,
+        eps_q=1e-1,
     ):
         super().__init__()
         self.model = CLNF(
             ckpt_predictor,
             num_bases=num_bases,
             latent_dim=latent_dim,
+            autoencoder_layers=autoencoder_layers,
+            flow_layers=flow_layers,
+            flow_hidden_dim=flow_hidden_dim,
+            eps_p=eps_p,
+            eps_q=eps_q,
         )
         self.sample_num = sample_num
 
         self.lr = lr
         self.beta = beta
-
-        # self.log_eps_init = log_eps_init
-        # self.log_eps_final = log_eps_final
-        # self.eps_steps = eps_steps
-        # self.model.eps.data.fill_(10 ** self.log_eps_init)
-        
+    
     def forward(self, x):
         return self.model(x)
     
@@ -680,295 +591,3 @@ class CLNFModule(pl.LightningModule):
             #     'frequency': 1,
             # }
         }
-
-
-# class CLNF(torch.nn.Module):
-#     def __init__(
-#         self, 
-#         ckpt_autoencoder,
-#         ckpt_predictor,
-#         num_bases,
-#         seed_scale=1.0,
-#     ):
-#         super().__init__()
-#         self.seed_scale = seed_scale
-#         self.register_buffer('eps', torch.tensor(1.0))
-
-#         self.autoencoder = AutoencoderModule.load_from_checkpoint(ckpt_autoencoder).model.eval()
-#         self.predictor = PredictorModule.load_from_checkpoint(ckpt_predictor).model.eval()
-
-#         num_layers = 6
-#         input_dim = 3*64
-#         hidden_dim = 3*64
-#         half_dim = input_dim // 2
-
-#         self.base = nf.distributions.base.DiagGaussian(input_dim, trainable=False)
-
-#         flows = []
-#         for i in range(num_layers):
-#             # Neural network with two hidden layers having 64 units each
-#             # Last layer is initialized by zeros making training more stable
-#             param_map = nf.nets.MLP([half_dim, hidden_dim, hidden_dim, input_dim], init_zeros=True)
-#             # Add flow layer
-#             flows.append(nf.flows.AffineCouplingBlock(param_map))
-#             # Swap dimensions
-#             flows.append(nf.flows.Permute(input_dim, mode='swap'))
-
-#         self.flow = nf.NormalizingFlow(self.base, flows)
-
-#         # self.W = torch.nn.Parameter(torch.randn(num_bases, input_dim, input_dim) / (input_dim ** 0.5))
-#         self.log_sigma = torch.nn.Parameter(torch.tensor(0.0))
-
-#         self.coef_net = torch.nn.Sequential(
-#             torch.nn.Linear(input_dim, input_dim),
-#             torch.nn.ReLU(),
-#             torch.nn.LayerNorm(input_dim),
-#             torch.nn.Linear(input_dim, input_dim),
-#             torch.nn.ReLU(),
-#             torch.nn.LayerNorm(input_dim),
-#             torch.nn.Linear(input_dim, input_dim),
-#             torch.nn.ReLU(),
-#             torch.nn.LayerNorm(input_dim),
-#             torch.nn.Linear(input_dim, input_dim),
-#             torch.nn.ReLU(),
-#             torch.nn.LayerNorm(input_dim),
-#             torch.nn.Linear(input_dim, num_bases),
-#         )
-
-#         self.vec_net = torch.nn.Sequential(
-#             torch.nn.Linear(input_dim, input_dim),
-#             torch.nn.ReLU(),
-#             torch.nn.LayerNorm(input_dim),
-#             torch.nn.Linear(input_dim, input_dim),
-#             torch.nn.ReLU(),
-#             torch.nn.LayerNorm(input_dim),
-#             torch.nn.Linear(input_dim, input_dim),
-#             torch.nn.ReLU(),
-#             torch.nn.LayerNorm(input_dim),
-#             torch.nn.Linear(input_dim, input_dim),
-#             torch.nn.ReLU(),
-#             torch.nn.LayerNorm(input_dim),
-#             torch.nn.Linear(input_dim, num_bases * input_dim),
-#         )
-
-#     def parameters(self, recurse = True):
-#         yield from self.flow.parameters(recurse)
-#         yield from self.coef_net.parameters(recurse)
-#         yield from self.vec_net.parameters(recurse)
-#         # yield self.W
-#         #yield self.log_sigma
-
-#     def encode(self, x):
-#         z = self.autoencoder.encode(x)
-#         z = z.reshape(z.size(0), -1)
-#         return self.flow.inverse(z)
-
-#     def decode(self, z):
-#         z = self.flow.forward(z)
-#         z = z.reshape(z.size(0), -1, 1, 1)
-#         with torch.no_grad():
-#             x = self.autoencoder.decode(z)
-#         return x
-    
-#     def sample(self, num_samples):
-#         z = self.flow.sample(num_samples)[0]
-#         z = z.reshape(num_samples, -1, 1, 1)
-#         with torch.no_grad():
-#             x = self.autoencoder.decode(z)
-#         return x
-
-#     @torch.no_grad()
-#     def sample_cotangent(self, x: torch.Tensor):
-#         def _sample_cotangent_single(x: torch.Tensor, cv: torch.Tensor):
-#             x = x.unsqueeze(0)
-#             cv = cv.unsqueeze(0)
-
-#             cv_color = torch.zeros_like(cv[:, :6].view(-1, 3, 2))
-#             cv_scale = cv[:, 6:7]
-#             cv_shape = cv[:, 7:11]
-#             cv_orientation = torch.zeros_like(cv[:, 11])
-
-#             cv = (cv_color, cv_scale, cv_shape, cv_orientation)
-
-#             _, vjp_fn = torch.func.vjp(self.predictor.forward, x)
-
-#             cv = vjp_fn(cv)[0]
-
-#             return cv[0].squeeze(0)
-        
-#         batch_size = x.size(0)
-#         cv = torch.randn(batch_size, 12, device=x.device) * self.seed_scale
-#         cv = torch.func.vmap(_sample_cotangent_single)(x, cv)
-
-#         return cv
-    
-#     @torch.no_grad()
-#     def encode_cotangent(self, z: torch.Tensor, cv: torch.Tensor):
-#         def _encode_cotangent_single(z: torch.Tensor, cv: torch.Tensor):
-#             z = z.unsqueeze(0)
-#             cv = cv.unsqueeze(0)
-
-#             _, vjp_fn = torch.func.vjp(self.autoencoder.decode, z)
-
-#             cv = vjp_fn(cv)[0]
-
-#             return cv.squeeze(0)
-
-#         cv = torch.func.vmap(_encode_cotangent_single)(z, cv)
-#         return cv
-
-#     def pullback_cotangent(self, z: torch.Tensor, cv: torch.Tensor):
-#         def _pullback_cotangent_single(z: torch.Tensor, cv: torch.Tensor):
-#             z = z.unsqueeze(0)
-#             cv = cv.unsqueeze(0)
-
-#             _, vjp_fn = torch.func.vjp(self.flow.forward, z)
-
-#             cv = vjp_fn(cv)[0]
-
-#             return cv.squeeze(0)
-
-#         cv = torch.func.vmap(_pullback_cotangent_single)(z, cv)
-
-#         return cv
-    
-#     def pushforward_tangent(self, z: torch.Tensor, tv: torch.Tensor):
-#         # z: (B, D)
-#         # tv: (B, K, D)
-#         def _pushforward_tangent_single(z: torch.Tensor, tv: torch.Tensor):
-#             # z: (D,)
-#             # tv: (K, D)
-#             z = z.unsqueeze(0)
-
-#             def _pushforward_tangent_inner(tv: torch.Tensor):
-#                 # tv: (D,)
-#                 tv = tv.unsqueeze(0)
-#                 tv = torch.func.jvp(self.flow.forward, (z,), (tv,))[1]
-#                 return tv.squeeze(0)
-            
-#             jvp_fn_multi = torch.func.vmap(_pushforward_tangent_inner)
-#             tv = jvp_fn_multi(tv)
-
-#             return tv
-
-#         tv = torch.func.vmap(_pushforward_tangent_single)(z, tv)
-#         return tv
-
-#     def log_prob(self, z: torch.Tensor, tv: torch.Tensor, cv: torch.Tensor):
-#         # zW = torch.einsum('bi,mij->bmj', z, self.W)
-#         # zW = zW / zW.square().sum(dim=-1, keepdim=True).mean(dim=-2, keepdim=True).sqrt()
-#         # zWz = torch.einsum('bmj,bj->bm', zW, z)
-
-#         zW = tv
-#         cv = cv + self.eps.sqrt() * torch.randn_like(cv)
-
-#         d = self.coef_net.forward(z)
-#         zWWz = torch.einsum('bmj,bnj->bmn', zW, zW)
-#         S = self.eps * d.exp().diag_embed() + zWWz
-
-#         zWv = torch.einsum('bmj,bj->bm', zW, cv)
-#         bilinear = torch.einsum('bm,bmn,bn->b', zWv, torch.inverse(S), zWv)
-#         squared = torch.einsum('bj,bj->b', cv, cv)
-#         total = (squared - bilinear) / self.eps
-
-#         logdet = torch.logdet(S) - d.sum(dim=-1) + self.eps.log().mul(tv.size(-1) - tv.size(-2))
-
-#         log_prob_v = -0.5 * (total + logdet + cv.size(-1) * math.log(2 * math.pi))
-#         log_prob_z = self.flow.log_prob(z)
-
-#         return log_prob_z, log_prob_v, d
-    
-#     def forward(self, x: torch.Tensor):
-#         z = self.autoencoder.encode(x)
-#         x_recon = self.autoencoder.decode(z)
-#         cv = self.sample_cotangent(x_recon)
-#         cv = self.encode_cotangent(z, cv)
-#         z = z.reshape(z.size(0), -1)
-#         cv = cv.reshape(cv.size(0), -1)
-#         z = self.flow.inverse(z)
-#         tv = self.vec_net.forward(z).view(z.size(0), -1, cv.size(-1))
-#         tv = self.pushforward_tangent(z, tv)
-#         log_prob_z, log_prob_v, d = self.log_prob(z, tv, cv)
-#         return log_prob_z, log_prob_v, d, cv, self.log_sigma
-
-
-# class CLNFModule(pl.LightningModule):
-#     def __init__(
-#         self, 
-#         ckpt_autoencoder,
-#         ckpt_predictor,
-#         num_bases,
-#         seed_scale=1.0,
-#         eps_init=1e-0,
-#         eps_final=1e-10,
-#         eps_steps=1000,
-#         sample_num=64
-#     ):
-#         super().__init__()
-#         self.model = CLNF(
-#             ckpt_autoencoder,
-#             ckpt_predictor,
-#             num_bases,
-#             seed_scale,
-#         )
-#         self.sample_num = sample_num
-
-#         # スケジューリングするスカラーパラメータ
-#         self.eps_init = eps_init
-#         self.eps_final = eps_final
-#         self.eps_steps = eps_steps
-        
-#     def on_train_epoch_start(self):
-#         # 線形スケジューリング例（他のスケジューラも可）
-#         progress = min(self.current_epoch / max(1, self.eps_steps), 1.0)
-#         new_value = self.eps_init + (self.eps_final - self.eps_init) * progress
-#         self.model.eps.data.fill_(new_value)
-#         self.log('scheduled_scalar', self.model.eps, on_epoch=True, prog_bar=True)
-
-#     def forward(self, x):
-#         return self.model(x)
-    
-#     def on_validation_epoch_end(self):
-#         # 検証終了時に画像生成しwandbに記録
-#         with torch.no_grad():
-#             img = self.model.sample(self.sample_num)
-#             img = img.clamp(0, 1)
-#             grid = tv.utils.make_grid(img.cpu(), nrow=8)
-#             wandb_logger = self.logger
-#             if hasattr(wandb_logger, "experiment"):
-#                 wandb_logger.experiment.log({f"val_generated/sample": wandb.Image(grid, caption=f"epoch {self.current_epoch}")})
-
-#     def training_step(self, batch, batch_idx):
-#         log_prob_z, log_prob_v, d, v, log_sigma = self.model.forward(batch)
-#         log_prob_z = log_prob_z.mean()
-#         log_prob_v = log_prob_v.mean()
-#         log_prob = log_prob_z + 0.0 * log_prob_v
-#         loss = -log_prob
-#         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
-#         self.log('train_log_prob_z', log_prob_z, on_step=True, on_epoch=True, prog_bar=True)
-#         self.log('train_log_prob_v', log_prob_v, on_step=True, on_epoch=True, prog_bar=True)
-#         self.log('train_log_sigma', log_sigma, on_step=True, on_epoch=True, prog_bar=False)
-#         # self.log('train_W_std', W.std(), on_step=True, on_epoch=True, prog_bar=False)
-#         self.log('train_v_std', v.std(), on_step=True, on_epoch=True, prog_bar=False)
-#         self.log('train_d_mean', d.mean(), on_step=True, on_epoch=True, prog_bar=False)
-#         return loss
-
-#     def validation_step(self, batch, batch_idx):
-#         log_prob_z, log_prob_v, d, v, log_sigma = self.model.forward(batch)
-#         log_prob_z = log_prob_z.mean()
-#         log_prob_v = log_prob_v.mean()
-#         log_prob = log_prob_z + 0.0 * log_prob_v
-#         loss = -log_prob
-#         self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-#         self.log('val_log_prob_z', log_prob_z, on_step=False, on_epoch=True, prog_bar=True)
-#         self.log('val_log_prob_v', log_prob_v, on_step=False, on_epoch=True, prog_bar=True)
-#         self.log('val_log_sigma', log_sigma, on_step=False, on_epoch=True, prog_bar=False)
-#         # self.log('val_W_std', W.std(), on_step=False, on_epoch=True, prog_bar=False)
-#         self.log('val_v_std', v.std(), on_step=False, on_epoch=True, prog_bar=False)
-#         self.log('val_d_mean', d.mean(), on_step=False, on_epoch=True, prog_bar=False)
-#         return loss
-
-#     def configure_optimizers(self):
-#         optimizer = torch.optim.Adamax(self.model.parameters(), lr=1e-4, weight_decay=1e-5)
-#         return optimizer
-        
