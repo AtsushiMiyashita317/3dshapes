@@ -50,10 +50,15 @@ def main(args):
     pl_model = CLNFModule(
         sample_num=args.sample_num,
         lr=args.lr,
-        # ckpt_autoencoder=args.ckpt_autoencoder,
         ckpt_predictor=args.ckpt_predictor,
+        num_bases=args.num_bases,
         latent_dim=args.latent_dim,
-        num_bases=args.num_bases
+        autoencoder_layers=args.autoencoder_layers,
+        flow_layers=args.flow_layers,
+        flow_hidden_dim=args.flow_hidden_dim,
+        log_var_init=args.log_var_init,
+        eps_p=args.eps_p,
+        eps_q=args.eps_q,
     )
 
     # DataLoader
@@ -66,6 +71,18 @@ def main(args):
 
     # wandb logger
     wandb_logger = WandbLogger(project=args.project)
+
+    wandb_logger.log_hyperparams({
+        "lr": args.lr,
+        "num_bases": args.num_bases,
+        "latent_dim": args.latent_dim,
+        "autoencoder_layers": args.autoencoder_layers,
+        "flow_layers": args.flow_layers,
+        "flow_hidden_dim": args.flow_hidden_dim,
+        "log_var_init": args.log_var_init,
+        "eps_p": args.eps_p,
+        "eps_q": args.eps_q,
+    })
 
     # ModelCheckpointコールバック
     checkpoint_callback = ModelCheckpoint(
@@ -103,9 +120,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # parser.add_argument('ckpt_autoencoder', type=str, help='Path to pretrained autoencoder checkpoint')
     parser.add_argument('ckpt_predictor', type=str, help='Path to pretrained predictor checkpoint')
-    parser.add_argument('--num_bases', type=int, default=64, help='Number of bases')
-    parser.add_argument('--latent_dim', type=int, default=128, help='Latent dimension of autoencoder')
+    parser.add_argument('--num_bases', type=int, default=66, help='Number of bases')
+    parser.add_argument('--latent_dim', type=int, default=12, help='Latent dimension of autoencoder')
     parser.add_argument('--batch_size', type=int, default=1000, help='Batch size')
+    parser.add_argument('--autoencoder_layers', type=int, default=3, help='Number of post layers in autoencoder')
+    parser.add_argument('--flow_layers', type=int, default=24, help='Number of layers in normalizing flow')
+    parser.add_argument('--flow_hidden_dim', type=int, default=192, help='Hidden dimension of flow networks')
+    parser.add_argument('--log_var_init', type=float, default=0.0, help='Initial log variance for conditional AE')
+    parser.add_argument('--eps_p', type=float, default=1e-3, help='Epsilon p for conditional AE')
+    parser.add_argument('--eps_q', type=float, default=1e-1, help='Epsilon q for conditional AE')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--max_epochs', type=int, default=5000, help='Max training steps')
     parser.add_argument('--val_interval', type=int, default=50, help='Validation interval in steps')
