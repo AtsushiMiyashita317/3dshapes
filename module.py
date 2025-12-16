@@ -465,8 +465,8 @@ class CLNF(torch.nn.Module):
         M = S_p + self.eps_p * I_p                                          # (batch_size, output_dim, output_dim)
         H = S_q + D * I_q                                                   # (batch_size, input_dim, input_dim)
 
-        norm_M = M.diagonal(dim1=-2, dim2=-1).mean(dim=-1)
-        norm_H = H.diagonal(dim1=-2, dim2=-1).mean(dim=-1)
+        norm_M = M.diagonal(dim1=-2, dim2=-1).mean(dim=-1).clamp_min(1e-6)
+        norm_H = H.diagonal(dim1=-2, dim2=-1).mean(dim=-1).clamp_min(1e-6)
         M = M + 1e-3 * norm_M.unsqueeze(-1).unsqueeze(-1) * I_p
         H = H + 1e-3 * norm_H.unsqueeze(-1).unsqueeze(-1) * I_q
 
@@ -477,8 +477,8 @@ class CLNF(torch.nn.Module):
 
         L_M = torch.linalg.cholesky(M)
         L_H = torch.linalg.cholesky(H)
-        logdet_M = 2 * torch.log(torch.diagonal(L_M, dim1=-2, dim2=-1).clamp_min(1e-12)).sum(-1)
-        logdet_H = 2 * torch.log(torch.diagonal(L_H, dim1=-2, dim2=-1).clamp_min(1e-12)).sum(-1)
+        logdet_M = 2 * torch.log(torch.diagonal(L_M, dim1=-2, dim2=-1)).sum(-1)
+        logdet_H = 2 * torch.log(torch.diagonal(L_H, dim1=-2, dim2=-1)).sum(-1)
         logdet_p = logdet_M + (input_dim - output_dim) * self.eps_p.log()   # (batch_size,)
         logdet_q = logdet_H                                                 # (batch_size,)
         logdet = -(logdet_p + logdet_q)
