@@ -465,15 +465,20 @@ class CLNF(torch.nn.Module):
         M = S_p + self.eps_p * I_p                                          # (batch_size, output_dim, output_dim)
         H = S_q + D * I_q                                                   # (batch_size, input_dim, input_dim)
 
+        norm_M = M.diagonal(dim1=-2, dim2=-1).mean(dim=-1)
+        norm_H = H.diagonal(dim1=-2, dim2=-1).mean(dim=-1)
+        M = M + 1e-3 * norm_M.unsqueeze(-1).unsqueeze(-1) * I_p
+        H = H + 1e-3 * norm_H.unsqueeze(-1).unsqueeze(-1) * I_q
+
         trace_p = torch.einsum('bij,bij,j->b', J_p, J_p, D)                 # (batch_size,)
         trace_q = torch.einsum('bij,bij->b', J_q, J_q)                      # (batch_size,)
         trace_pq = torch.einsum('bij,bij->b', S_pq, S_pq)                   # (batch_size,)
         trace = self.eps_p * (D.sum() + trace_q) + trace_p + trace_pq       # (batch_size,)
 
-        l_M, _ = torch.linalg.eigh(M)
-        l_H , _ = torch.linalg.eigh(H)
-        logdet_M = l_M.clamp_min(1e-12).log().sum(dim=-1)                      # (batch_size,)
-        logdet_H = l_H.clamp_min(1e-12).log().sum(dim=-1)                      # (batch_size,)
+        L_M = torch.linalg.cholesky(M)
+        L_H = torch.linalg.cholesky(H)
+        logdet_M = 2 * torch.log(torch.diagonal(L_M, dim1=-2, dim2=-1).clamp_min(1e-12)).sum(-1)
+        logdet_H = 2 * torch.log(torch.diagonal(L_H, dim1=-2, dim2=-1).clamp_min(1e-12)).sum(-1)
         logdet_p = logdet_M + (input_dim - output_dim) * self.eps_p.log()   # (batch_size,)
         logdet_q = logdet_H                                                 # (batch_size,)
         logdet = -(logdet_p + logdet_q)
