@@ -469,11 +469,12 @@ class CLNF(torch.nn.Module):
         norm_H = H.diagonal(dim1=-2, dim2=-1).mean(dim=-1).clamp_min(1e-6)
         M = M + 1e-3 * norm_M.unsqueeze(-1).unsqueeze(-1) * I_p
         H = H + 1e-3 * norm_H.unsqueeze(-1).unsqueeze(-1) * I_q
+        D = D + 1e-3 * norm_H.unsqueeze(-1)
 
-        trace_p = torch.einsum('bij,bij,j->b', J_p, J_p, D)                 # (batch_size,)
+        trace_p = torch.einsum('bij,bij,bj->b', J_p, J_p, D)                # (batch_size,)
         trace_q = torch.einsum('bij,bij->b', J_q, J_q)                      # (batch_size,)
         trace_pq = torch.einsum('bij,bij->b', S_pq, S_pq)                   # (batch_size,)
-        trace = self.eps_p * (D.sum() + trace_q) + trace_p + trace_pq       # (batch_size,)
+        trace = (self.eps_p + 1e-3 * norm_M) * (D.sum() + trace_q) + trace_p + trace_pq       # (batch_size,)
 
         L_M = torch.linalg.cholesky(M)
         L_H = torch.linalg.cholesky(H)
