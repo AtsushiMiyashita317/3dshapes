@@ -474,7 +474,7 @@ class CLNF(torch.nn.Module):
         trace_p = torch.einsum('bij,bij,bj->b', J_p, J_p, D)                # (batch_size,)
         trace_q = torch.einsum('bij,bij->b', J_q, J_q)                      # (batch_size,)
         trace_pq = torch.einsum('bij,bij->b', S_pq, S_pq)                   # (batch_size,)
-        trace = (self.eps_p + 1e-3 * norm_M) * (D.sum() + trace_q) + trace_p + trace_pq       # (batch_size,)
+        trace = (self.eps_p + 1e-3 * norm_M) * (D.sum(-1) + trace_q) + trace_p + trace_pq       # (batch_size,)
 
         L_M = torch.linalg.cholesky(M)
         L_H = torch.linalg.cholesky(H)
