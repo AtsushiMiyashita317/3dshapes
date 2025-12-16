@@ -94,6 +94,17 @@ def main(args):
         verbose=True
     )
 
+    # 500エポックごとに保存するModelCheckpointコールバック
+    periodic_checkpoint_callback = ModelCheckpoint(
+        dirpath=args.ckpt_dir,
+        filename="epoch{epoch:04d}",
+        every_n_epochs=500,
+        save_top_k=-1,
+        save_last=False,
+        save_weights_only=False,
+        verbose=True
+    )
+
     if args.backend is not None:
         from pytorch_lightning.strategies import DDPStrategy
         strategy = DDPStrategy(process_group_backend=args.backend, find_unused_parameters=True)
@@ -108,7 +119,7 @@ def main(args):
         strategy=strategy,
         check_val_every_n_epoch=args.val_interval,
         logger=wandb_logger,
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback, periodic_checkpoint_callback],
         enable_checkpointing=True
     )
     trainer.fit(pl_model, train_loader, val_loader, ckpt_path=args.resume)
