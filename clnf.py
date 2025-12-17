@@ -97,7 +97,7 @@ def main(args):
 
     # 500エポックごとに保存するModelCheckpointコールバック
     periodic_checkpoint_callback = ModelCheckpoint(
-        dirpath=args.ckpt_dir,
+        dirpath=wandb_logger.experiment.dir if type(wandb_logger.experiment.dir) is str else args.ckpt_dir,
         filename="epoch{epoch:04d}",
         every_n_epochs=500,
         save_top_k=-1,
