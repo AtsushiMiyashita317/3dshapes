@@ -358,6 +358,7 @@ class CLNF(torch.nn.Module):
         flow_hidden_dim=192,
         eps_p=1e-3,
         eps_q=1e-1,
+        scale_map="exp_clamp",
     ):
         super().__init__()
 
@@ -381,7 +382,7 @@ class CLNF(torch.nn.Module):
             # Last layer is initialized by zeros making training more stable
             param_map = nf.nets.MLP([half_dim, hidden_dim, hidden_dim, input_dim], init_zeros=True)
             # Add flow layer
-            flows.append(nf.flows.AffineCouplingBlock(param_map))
+            flows.append(nf.flows.AffineCouplingBlock(param_map, scale_map=scale_map))
             # Swap dimensions
             flows.append(nf.flows.Permute(input_dim, mode='swap'))
 
@@ -528,6 +529,7 @@ class CLNFModule(pl.LightningModule):
         flow_hidden_dim=192,
         eps_p=1e-3,
         eps_q=1e-1,
+        scale_map="exp_clamp",
     ):
         super().__init__()
         self.model = CLNF(
@@ -539,6 +541,7 @@ class CLNFModule(pl.LightningModule):
             flow_hidden_dim=flow_hidden_dim,
             eps_p=eps_p,
             eps_q=eps_q,
+            scale_map=scale_map,
         )
         self.sample_num = sample_num
 
