@@ -420,74 +420,79 @@ class CLNF(torch.nn.Module):
         z = z.reshape(z.size(0), -1, 1, 1)
         x = self.autoencoder.decode(z)
         return x
+    
+    def _predict(self, y: torch.Tensor):
+        # y: (input_dim,)
+        # Returns: (output_dim,)
+        y = y.reshape(1, -1, 1, 1)
+        x = self.autoencoder.decode(y)
+        _, scale, shape, _ = self.predictor.forward(x)
+        out = torch.cat([scale, shape], dim=-1).squeeze(0)
+        return out
 
-    def pullback_tangent(self, z: torch.Tensor, v: torch.Tensor):
-        """
-        Args:
-            z: (batch_size, input_dim)
-            v: (batch_size, output_dim, input_dim)
-        Returns:
-            J: (batch_size, output_dim, input_dim)
-        """
-        def _forward_flow(z: torch.Tensor):
+    def sample_cotangent(self, y: torch.Tensor):
+        def _sample_cotangent_single(y: torch.Tensor, cv: torch.Tensor):
+            # y: (input_dim,)
+            # cv: (output_dim,)
+            # Returns: (input_dim,)
+
+            _, vjp_fn = torch.func.vjp(self._predict, y)
+
+            cv = vjp_fn(cv)[0]
+
+            return cv
+
+        batch_size = y.size(0)
+        cv = torch.randn(batch_size, 5, device=y.device)
+        cv = torch.func.vmap(_sample_cotangent_single)(y, cv)
+        norm_cv = cv.square().mean().sqrt().clamp_min(1e-6)
+        cv = cv + norm_cv * self.eps_p ** 0.5 * torch.randn_like(cv)
+
+        return cv
+
+    def pullback_cotangent(self, z: torch.Tensor, cv: torch.Tensor):
+        def _pullback_cotangent_single(z: torch.Tensor, cv: torch.Tensor):
             z = z.unsqueeze(0)
-            y = self.flow.forward(z)
-            return y.squeeze(0)
-        
-        def _forward_single(z: torch.Tensor, v: torch.Tensor):
-            # z: (input_dim,)
-            # v: (num_bases, input_dim)
-            J = torch.func.vmap(torch.func.vjp(_forward_flow, z)[1])(v)  # (num_bases, input_dim)
-            return J[0]
-        J = torch.func.vmap(_forward_single)(z, v)  # (batch_size, num_bases, input_dim)
-        return J
+            cv = cv.unsqueeze(0)
 
-    def kl_divergence(self, J_p: torch.Tensor, J_q: torch.Tensor):
+            _, vjp_fn = torch.func.vjp(self.flow.forward, z)
+
+            cv = vjp_fn(cv)[0]
+
+            return cv.squeeze(0)
+
+        cv = torch.func.vmap(_pullback_cotangent_single)(z, cv)
+
+        return cv
+
+    def log_prob(self, cv: torch.Tensor, J_q: torch.Tensor):
         """
         Args:
-            J_p: (batch_size, output_dim, input_dim)
+            cv: (batch_size, input_dim)
             J_q: (batch_size, num_bases, input_dim)
         Returns:
-            kl: (batch_size,)
+            log_prob: (batch_size,)
         """
 
-        input_dim = J_p.size(-1)
-        output_dim = J_p.size(-2)
+        input_dim = J_q.size(-1)
 
-        J_p = J_p / J_p.square().sum().sqrt()
-
-        S_p = torch.einsum('bni,bmi->bnm', J_p, J_p)                        # (batch_size, output_dim, output_dim)
         S_q = torch.einsum('bin,bim->bnm', J_q, J_q)                        # (batch_size, input_dim, input_dim)
-        S_pq = torch.einsum('bni,bmi->bnm', J_p, J_q)                       # (batch_size, output_dim, num_bases)
         D = self.log_var_diag.neg().exp()                                   # (input_dim,)
 
-        I_p = torch.eye(output_dim, device=J_p.device)                      # (output_dim, output_dim)
         I_q = torch.eye(input_dim, device=J_q.device)                       # (input_dim, input_dim)
-        M = S_p + self.eps_p * I_p                                          # (batch_size, output_dim, output_dim)
         H = S_q + D * I_q                                                   # (batch_size, input_dim, input_dim)
 
-        norm_M = M.diagonal(dim1=-2, dim2=-1).mean(dim=-1).clamp_min(1e-6)
         norm_H = H.diagonal(dim1=-2, dim2=-1).mean(dim=-1).clamp_min(1e-6)
-        M = M + 1e-3 * norm_M.unsqueeze(-1).unsqueeze(-1) * I_p
         H = H + 1e-3 * norm_H.unsqueeze(-1).unsqueeze(-1) * I_q
-        D = D + 1e-3 * norm_H.unsqueeze(-1)
 
-        trace_p = torch.einsum('bij,bij,bj->b', J_p, J_p, D)                # (batch_size,)
-        trace_q = torch.einsum('bij,bij->b', J_q, J_q)                      # (batch_size,)
-        trace_pq = torch.einsum('bij,bij->b', S_pq, S_pq)                   # (batch_size,)
-        trace = (self.eps_p + 1e-3 * norm_M) * (D.sum(-1) + trace_q) + trace_p + trace_pq       # (batch_size,)
+        trace = torch.einsum('bi,bij,bj->b', cv, H, cv)                # (batch_size,)
 
-        L_M = torch.linalg.cholesky(M)
         L_H = torch.linalg.cholesky(H)
-        logdet_M = 2 * torch.log(torch.diagonal(L_M, dim1=-2, dim2=-1)).sum(-1)
-        logdet_H = 2 * torch.log(torch.diagonal(L_H, dim1=-2, dim2=-1)).sum(-1)
-        logdet_p = logdet_M + (input_dim - output_dim) * self.eps_p.log()   # (batch_size,)
-        logdet_q = logdet_H                                                 # (batch_size,)
-        logdet = -(logdet_p + logdet_q)
+        logdet = 2 * torch.log(torch.diagonal(L_H, dim1=-2, dim2=-1)).sum(-1)
 
-        kl = 0.5 * (trace + logdet - input_dim)
+        log_prob = 0.5 * (logdet - trace - input_dim * math.log(2 * math.pi))  # (batch_size,)
 
-        return kl
+        return log_prob
 
     @torch.no_grad()
     def sample(self, num_samples):
@@ -501,18 +506,19 @@ class CLNF(torch.nn.Module):
         x_recon = self.autoencoder.decode(y)
 
         y = y.detach().reshape(y.size(0), -1)
-        log_prob = self.flow.log_prob(y)
+        z, logdet = self.flow.inverse_and_log_det(y)
+        log_prob_data = self.flow.q0.log_prob(z) + logdet  # (B,)
 
-        z = self.flow.inverse(y)
-
-        J_p = self.jacobian_fn(y)  # (B, output_dim, input_dim)
-        J_p = self.pullback_tangent(z, J_p.detach())  # (B, output_dim, input_dim)
+        cv = self.sample_cotangent(y)  # (B, input_dim)
+        cv = self.pullback_cotangent(z, cv.detach())  # (B, input_dim)
 
         J_q = torch.einsum('bi,mji->bmj', z, self.W - self.W.mT)  # (B, num_bases, input_dim)
 
-        kl = self.kl_divergence(J_p, J_q)  # (B,)
+        norm_cv = cv.square().mean().sqrt().clamp_min(1e-6)
+        cv = cv / norm_cv
+        log_prob_cot = self.log_prob(cv, J_q) - logdet - norm_cv.log()  # (B,)
 
-        return x_recon, log_prob, kl
+        return x_recon, log_prob_data, log_prob_cot
 
 
 class CLNFModule(pl.LightningModule):
@@ -562,34 +568,33 @@ class CLNFModule(pl.LightningModule):
                 wandb_logger.experiment.log({f"val_generated/sample": wandb.Image(grid, caption=f"epoch {self.current_epoch}")})
 
     def training_step(self, batch, batch_idx):
-        recon, log_prob, kl = self.model.forward(batch)
-        log_prob = log_prob.mean()
-        kl = kl.mean()
-        nll_loss = kl - log_prob
+        recon, log_prob_data, log_prob_cot = self.model.forward(batch)
+        log_prob_data = log_prob_data.mean()
+        log_prob_cot = log_prob_cot.mean()
+        nll_loss = - (log_prob_data + log_prob_cot)
         recon_loss = torch.nn.functional.mse_loss(recon, batch)
         loss = nll_loss + self.beta * recon_loss
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log('train_log_prob', log_prob, on_step=True, on_epoch=True, prog_bar=False)
+        self.log('train_log_prob_data', log_prob_data, on_step=True, on_epoch=True, prog_bar=False)
+        self.log('train_log_prob_cot', log_prob_cot, on_step=True, on_epoch=True, prog_bar=False)
         self.log('train_recon_loss', recon_loss, on_step=True, on_epoch=True, prog_bar=False)
         self.log('train_nll', nll_loss, on_step=True, on_epoch=True, prog_bar=False)
-        self.log('train_kl', kl, on_step=True, on_epoch=True, prog_bar=False)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        recon, log_prob, kl = self.model.forward(batch)
-        log_prob = log_prob.mean()
-        kl = kl.mean()
-        nll_loss = kl - log_prob
+        recon, log_prob_data, log_prob_cot = self.model.forward(batch)
+        log_prob_data = log_prob_data.mean()
+        log_prob_cot = log_prob_cot.mean()
+        nll_loss = - (log_prob_data + log_prob_cot)
         recon_loss = torch.nn.functional.mse_loss(recon, batch)
         loss = nll_loss + self.beta * recon_loss
         self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val_log_prob', log_prob, on_step=False, on_epoch=True, prog_bar=False)
+        self.log('val_log_prob_data', log_prob_data, on_step=False, on_epoch=True, prog_bar=False)
+        self.log('val_log_prob_cot', log_prob_cot, on_step=False, on_epoch=True, prog_bar=False)
         self.log('val_recon_loss', recon_loss, on_step=False, on_epoch=True, prog_bar=False)
         self.log('val_nll', nll_loss, on_step=False, on_epoch=True, prog_bar=False)
-        self.log('val_kl', kl, on_step=False, on_epoch=True, prog_bar=False)
         return loss
     
-
     def configure_optimizers(self):
         optimizer = torch.optim.Adamax(self.model.parameters(), lr=self.lr, weight_decay=3e-5)
         # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.3)
