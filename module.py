@@ -445,8 +445,6 @@ class CLNF(torch.nn.Module):
         batch_size = y.size(0)
         cv = torch.randn(batch_size, 5, device=y.device)
         cv = torch.func.vmap(_sample_cotangent_single)(y, cv)
-        norm_cv = cv.square().mean().sqrt().clamp_min(1e-6)
-        cv = cv + norm_cv * self.eps_p ** 0.5 * torch.randn_like(cv)
 
         return cv
 
@@ -484,11 +482,14 @@ class CLNF(torch.nn.Module):
 
         norm_H = H.diagonal(dim1=-2, dim2=-1).mean(dim=-1).clamp_min(1e-6)
         H = H + 1e-3 * norm_H.unsqueeze(-1).unsqueeze(-1) * I_q
+        M = self.eps_p + torch.einsum('bi,bi->b', cv, cv)                   # (batch_size,)
 
+        cv = cv + self.eps_p.sqrt() * torch.randn_like(cv)
         trace = torch.einsum('bi,bij,bj->b', cv, H, cv)                # (batch_size,)
 
         L_H = torch.linalg.cholesky(H)
         logdet = 2 * torch.log(torch.diagonal(L_H, dim1=-2, dim2=-1)).sum(-1)
+        logdet = logdet + torch.log(M) + (input_dim - 1) * torch.log(self.eps_p)  # (batch_size,)
 
         log_prob = 0.5 * (logdet - trace - input_dim * math.log(2 * math.pi))  # (batch_size,)
 
@@ -514,9 +515,7 @@ class CLNF(torch.nn.Module):
 
         J_q = torch.einsum('bi,mji->bmj', z, self.W - self.W.mT)  # (B, num_bases, input_dim)
 
-        norm_cv = cv.square().mean().sqrt().clamp_min(1e-6)
-        cv = cv / norm_cv
-        log_prob_cot = self.log_prob(cv, J_q) - logdet - norm_cv.log()  # (B,)
+        log_prob_cot = self.log_prob(cv, J_q)  # (B,)
 
         return x_recon, log_prob_data, log_prob_cot
 
