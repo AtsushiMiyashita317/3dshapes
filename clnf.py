@@ -51,7 +51,8 @@ def main(args):
         sample_num=args.sample_num,
         lr=args.lr,
         ckpt_predictor=args.ckpt_predictor,
-        num_bases=args.num_bases,
+        num_bases_sym=args.num_bases_sym,
+        num_bases_null=args.num_bases_null,
         latent_dim=args.latent_dim,
         autoencoder_layers=args.autoencoder_layers,
         flow_layers=args.flow_layers,
@@ -74,7 +75,8 @@ def main(args):
 
     wandb_logger.log_hyperparams({
         "lr": args.lr,
-        "num_bases": args.num_bases,
+        "num_bases_sym": args.num_bases_sym,
+        "num_bases_null": args.num_bases_null,
         "latent_dim": args.latent_dim,
         "autoencoder_layers": args.autoencoder_layers,
         "flow_layers": args.flow_layers,
@@ -130,7 +132,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # parser.add_argument('ckpt_autoencoder', type=str, help='Path to pretrained autoencoder checkpoint')
     parser.add_argument('ckpt_predictor', type=str, help='Path to pretrained predictor checkpoint')
-    parser.add_argument('--num_bases', type=int, default=66, help='Number of bases')
+    parser.add_argument('--num_bases_sym', type=int, default=66, help='Number of bases for symmetric part')
+    parser.add_argument('--num_bases_null', type=int, default=66, help='Number of bases for null part')
     parser.add_argument('--latent_dim', type=int, default=12, help='Latent dimension of autoencoder')
     parser.add_argument('--batch_size', type=int, default=1000, help='Batch size')
     parser.add_argument('--autoencoder_layers', type=int, default=3, help='Number of post layers in autoencoder')
