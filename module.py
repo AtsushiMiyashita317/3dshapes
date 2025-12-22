@@ -495,11 +495,11 @@ class CLNF(torch.nn.Module):
         num_bases = J.size(-2)
 
         S_q = torch.einsum('bin,bim->bnm', J, J)                        # (batch_size, input_dim, input_dim)
-        S_q = S_q / num_bases
-        D = log_var.neg().exp()                                   # (input_dim,)
+        # S_q = S_q / num_bases
+        # D = log_var.neg().exp()                                   # (input_dim,)
 
         I_q = torch.eye(input_dim, device=J.device)                       # (input_dim, input_dim)
-        H = S_q + D * I_q                                                   # (batch_size, input_dim, input_dim)
+        H = S_q + self.eps_q * I_q                                        # (batch_size, input_dim, input_dim)
 
         norm_H = H.diagonal(dim1=-2, dim2=-1).mean(dim=-1).clamp_min(1e-6)
         H = H + 1e-3 * norm_H.unsqueeze(-1).unsqueeze(-1) * I_q
@@ -557,8 +557,14 @@ class CLNF(torch.nn.Module):
         cv_sym = self.pullback_cotangent(z, cv_sym)  # (B, input_dim)
         cv_null = self.pullback_cotangent(z, cv_null)  # (B, input_dim)
 
-        J_sym = torch.einsum('bi,mji->bmj', z, self.W_sym - self.W_sym.mT)  # (B, num_bases, input_dim)
-        J_null = torch.einsum('bi,mji->bmj', z, self.W_null - self.W_null.mT)  # (B, num_null, input_dim)
+        L = self.W_sym - self.W_sym.mT  # (num_bases, input_dim, input_dim)
+        L = L / L.square().mean(dim=(-2, -1), keepdim=True).clamp_min(1e-6).sqrt()
+        L = L / L.size(-1) ** 0.5
+        J_sym = torch.einsum('bi,mji->bmj', z, L)  # (B, num_bases, input_dim)
+        L = self.W_null - self.W_null.mT  # (num_bases, input_dim, input_dim)
+        L = L / L.square().mean(dim=(-2, -1), keepdim=True).clamp_min(1e-6).sqrt()
+        L = L / L.size(-1) ** 0.5
+        J_null = torch.einsum('bi,mji->bmj', z, L)  # (B, num_null, input_dim)
 
         log_prob_sym = self.log_prob(cv_sym, J_sym, self.log_var_sym)  # (B,)
         log_prob_null = self.log_prob(cv_null, J_null, self.log_var_null)  # (B,)
