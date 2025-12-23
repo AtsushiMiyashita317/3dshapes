@@ -509,6 +509,7 @@ class CLNF(torch.nn.Module):
 
         # cv = cv + self.eps_p.sqrt() * torch.randn_like(cv)
 
+        input_dim = v.size(-1)
         num_bases = v.size(-2)
 
         S_pp = torch.einsum('bi,bi->b', cv, cv)
@@ -525,8 +526,9 @@ class CLNF(torch.nn.Module):
 
         L_H = torch.linalg.cholesky(M)
         logdet = 2 * torch.log(torch.diagonal(L_H, dim1=-2, dim2=-1)).sum(-1)
+        logdet = logdet + (input_dim - num_bases) * torch.log(eps_q)
 
-        log_prob = 0.5 * (logdet - trace)
+        log_prob = 0.5 * (logdet - trace - input_dim * math.log(2 * math.pi))
 
         return log_prob
 
