@@ -495,25 +495,25 @@ class CLNF(torch.nn.Module):
         v = self.pushforward_tangent_func(z, v)  # (batch_size, num_bases, 3, 64, 64)
         return v
 
-    def log_prob(self, cv: torch.Tensor, v: torch.Tensor):
+    def log_prob(self, cv: torch.Tensor, v: torch.Tensor, J: torch.Tensor) -> torch.Tensor:
         """
         Args:
             cv: (batch_size, *)
-            v: (batch_size, num_bases, *)
+            v: (batch_size, num_bases, input_dim)
+            J: (batch_size, *, input_dim)
         Returns:
             log_prob: (batch_size,)
         """
-        cv = cv.reshape(cv.size(0), -1)  # (batch_size, input_dim)
-        v = v.reshape(v.size(0), v.size(1), -1)  # (batch_size, num_bases, input_dim)
+        cv = cv.reshape(cv.size(0), -1)  # (batch_size, output_dim)
+        J = J.reshape(J.size(0), -1, J.size(-1))  # (batch_size, output_dim, input_dim)
 
         # cv = cv + self.eps_p.sqrt() * torch.randn_like(cv)
 
-        input_dim = v.size(-1)
         num_bases = v.size(-2)
 
         S_pp = torch.einsum('bi,bi->b', cv, cv)
-        S_qq = torch.einsum('bni,bmi->bnm', v, v)
-        S_pq = torch.einsum('bi,bni->bn', cv, v)
+        S_qq = torch.einsum('bni,bji,bjk,bmk->bnm', v, J, J, v)
+        S_pq = torch.einsum('bj,bji,bni->bn', cv, J, v)
 
         I = torch.eye(num_bases, device=v.device)
         norm = S_qq.diagonal(dim1=-2, dim2=-1).mean(dim=-1).clamp_min(1e-9)     # (batch_size,)
@@ -560,7 +560,6 @@ class CLNF(torch.nn.Module):
         else:
             with torch.no_grad():
                 J = self.jacobian_func(y)  # (B, input_dim, 3, 64, 64)
-        v = torch.einsum('bni,b...i->bn...', v, J)  # (B, num_bases, 3, 64, 64)
 
         if self.training:
             with torch.no_grad():
@@ -579,7 +578,7 @@ class CLNF(torch.nn.Module):
         cv = cv / self.var_cv.clamp_min(1e-6).sqrt()
         cv = cv.detach()
 
-        log_prob_cotangent = self.log_prob(cv, v)  # (B,)
+        log_prob_cotangent = self.log_prob(cv, v, J)  # (B,)
 
         return x, log_prob_data, log_prob_cotangent
 
