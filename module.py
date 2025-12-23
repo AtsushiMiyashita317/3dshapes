@@ -577,6 +577,7 @@ class CLNF(torch.nn.Module):
                     self.var_cv.mul_(0.9).add_(0.1 * var)
 
         v = v / v.square().mean((0,1), keepdim=True).clamp_min(1e-6).sqrt()
+        v = v / v.size(1)
         cv = cv / self.var_cv.clamp_min(1e-6).sqrt()
         cv = cv.detach()
 
