@@ -60,7 +60,7 @@ def main(args):
         eps_p=args.eps_p,
         eps_q=args.eps_q,
         scale_map=args.scale_map,
-        detach_decoder_for_pushforward=args.detach_decoder_for_pushforward,
+        optimize_decoder_for_pushforward=args.optimize_decoder_for_pushforward
     )
 
     # DataLoader
@@ -85,7 +85,7 @@ def main(args):
         "eps_p": args.eps_p,
         "eps_q": args.eps_q,
         "scale_map": args.scale_map,
-        "detach_decoder_for_pushforward": args.detach_decoder_for_pushforward
+        "optimize_decoder_for_pushforward": args.optimize_decoder_for_pushforward
     })
 
     # ModelCheckpointコールバック
@@ -144,7 +144,7 @@ if __name__ == "__main__":
     parser.add_argument('--eps_p', type=float, default=1e-3, help='Epsilon p for conditional AE')
     parser.add_argument('--eps_q', type=float, default=1e-1, help='Epsilon q for conditional AE')
     parser.add_argument('--scale_map', type=str, default='exp_clamp', help='Scale map for flow (exp, exp_clamp)')
-    parser.add_argument('--detach_decoder_for_pushforward', action='store_true', help='Detach decoder when computing pushforward distribution')
+    parser.add_argument('--optimize_decoder_for_pushforward', action='store_true', help='Optimize decoder when computing pushforward distribution')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--beta', type=float, default=10.0, help='Beta parameter for loss weighting')
     parser.add_argument('--max_epochs', type=int, default=5000, help='Max training steps')

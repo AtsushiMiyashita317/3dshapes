@@ -360,7 +360,7 @@ class CLNF(torch.nn.Module):
         eps_p=1e-3,
         eps_q=1e-1,
         scale_map="exp_clamp",
-        detach_decoder_for_pushforward=True,
+        optimize_decoder_for_pushforward=False,
     ):
         super().__init__()
 
@@ -368,7 +368,7 @@ class CLNF(torch.nn.Module):
 
         self.latent_dim = latent_dim
         self.num_bases = num_bases
-        self.detach_decoder_for_pushforward = detach_decoder_for_pushforward
+        self.optimize_decoder_for_pushforward = optimize_decoder_for_pushforward
 
         self.autoencoder = Autoencoder(num_post_layers=autoencoder_layers, latent_dim=latent_dim)
 
@@ -555,11 +555,11 @@ class CLNF(torch.nn.Module):
         
         v = self.pushforward_tangent(z, v)  # (B, num_bases, input_dim)
 
-        if self.detach_decoder_for_pushforward:
+        if self.optimize_decoder_for_pushforward:
+            J = self.jacobian_func(y)  # (B, input_dim, 3, 64, 64)
+        else:
             with torch.no_grad():
                 J = self.jacobian_func(y)  # (B, input_dim, 3, 64, 64)
-        else:
-            J = self.jacobian_func(y)  # (B, input_dim, 3, 64, 64)
         v = torch.einsum('bni,b...i->bn...', v, J)  # (B, num_bases, 3, 64, 64)
 
         if self.training:
@@ -599,7 +599,7 @@ class CLNFModule(pl.LightningModule):
         eps_p=1e-3,
         eps_q=1e-1,
         scale_map="exp_clamp",
-        detach_decoder_for_pushforward=True,
+        optimize_decoder_for_pushforward=False,
     ):
         super().__init__()
         self.model = CLNF(
@@ -612,7 +612,7 @@ class CLNFModule(pl.LightningModule):
             eps_p=eps_p,
             eps_q=eps_q,
             scale_map=scale_map,
-            detach_decoder_for_pushforward=detach_decoder_for_pushforward,
+            optimize_decoder_for_pushforward=optimize_decoder_for_pushforward,
         )
         self.sample_num = sample_num
 
