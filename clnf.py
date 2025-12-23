@@ -59,6 +59,7 @@ def main(args):
         flow_hidden_dim=args.flow_hidden_dim,
         eps_p=args.eps_p,
         eps_q=args.eps_q,
+        eps_r=args.eps_r,
         scale_map=args.scale_map,
     )
 
@@ -83,6 +84,9 @@ def main(args):
         "flow_hidden_dim": args.flow_hidden_dim,
         "eps_p": args.eps_p,
         "eps_q": args.eps_q,
+        "eps_r": args.eps_r,
+        "scale_map": args.scale_map,
+        "batch_size": args.batch_size,
     })
 
     # ModelCheckpointコールバック
@@ -141,6 +145,7 @@ if __name__ == "__main__":
     parser.add_argument('--flow_hidden_dim', type=int, default=192, help='Hidden dimension of flow networks')
     parser.add_argument('--eps_p', type=float, default=1e-3, help='Epsilon p for conditional AE')
     parser.add_argument('--eps_q', type=float, default=1e-1, help='Epsilon q for conditional AE')
+    parser.add_argument('--eps_r', type=float, default=1e-1, help='Epsilon r for conditional AE')
     parser.add_argument('--scale_map', type=str, default='exp_clamp', help='Scale map for flow (exp, exp_clamp)')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--max_epochs', type=int, default=5000, help='Max training steps')

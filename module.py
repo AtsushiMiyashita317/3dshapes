@@ -359,6 +359,7 @@ class CLNF(torch.nn.Module):
         flow_hidden_dim=192,
         eps_p=1e-3,
         eps_q=1e-1,
+        eps_r=1e-1,
         scale_map="exp_clamp",
     ):
         super().__init__()
@@ -398,6 +399,7 @@ class CLNF(torch.nn.Module):
 
         self.register_buffer('eps_p', torch.tensor(eps_p))
         self.register_buffer('eps_q', torch.tensor(eps_q))
+        self.register_buffer('eps_r', torch.tensor(eps_r))
         self.register_buffer('var_sym', torch.tensor(-1.0))
         self.register_buffer('var_null', torch.tensor(-1.0))
 
@@ -482,7 +484,7 @@ class CLNF(torch.nn.Module):
 
         return cv
 
-    def log_prob(self, cv: torch.Tensor, J: torch.Tensor, log_var: torch.Tensor):
+    def log_prob(self, cv: torch.Tensor, J: torch.Tensor, log_var: torch.Tensor, eps: torch.Tensor):
         """
         Args:
             cv: (batch_size, input_dim)
@@ -499,10 +501,8 @@ class CLNF(torch.nn.Module):
         # D = log_var.neg().exp()                                   # (input_dim,)
 
         I_q = torch.eye(input_dim, device=J.device)                       # (input_dim, input_dim)
-        H = S_q + self.eps_q * I_q                                        # (batch_size, input_dim, input_dim)
-
-        norm_H = H.diagonal(dim1=-2, dim2=-1).mean(dim=-1).clamp_min(1e-6)
-        H = H + 1e-3 * norm_H.unsqueeze(-1).unsqueeze(-1) * I_q
+        norm = S_q.diagonal(dim1=-2, dim2=-1).mean(dim=-1).clamp_min(1e-6)
+        H = S_q + eps * norm.unsqueeze(-1).unsqueeze(-1) * I_q
         M = self.eps_p + torch.einsum('bi,bi->b', cv, cv)                   # (batch_size,)
 
         cv = cv + self.eps_p.sqrt() * torch.randn_like(cv)
@@ -566,8 +566,8 @@ class CLNF(torch.nn.Module):
         L = L / L.size(-1) ** 0.5
         J_null = torch.einsum('bi,mji->bmj', z, L)  # (B, num_null, input_dim)
 
-        log_prob_sym = self.log_prob(cv_sym, J_sym, self.log_var_sym)  # (B,)
-        log_prob_null = self.log_prob(cv_null, J_null, self.log_var_null)  # (B,)
+        log_prob_sym = self.log_prob(cv_sym, J_sym, self.log_var_sym, self.eps_q)  # (B,)
+        log_prob_null = self.log_prob(cv_null, J_null, self.log_var_null, self.eps_r)  # (B,)
 
         return x, log_prob_data, log_prob_sym, log_prob_null
 
@@ -587,6 +587,7 @@ class CLNFModule(pl.LightningModule):
         flow_hidden_dim=192,
         eps_p=1e-3,
         eps_q=1e-1,
+        eps_r=1e-1,
         scale_map="exp_clamp",
     ):
         super().__init__()
@@ -600,6 +601,7 @@ class CLNFModule(pl.LightningModule):
             flow_hidden_dim=flow_hidden_dim,
             eps_p=eps_p,
             eps_q=eps_q,
+            eps_r=eps_r,
             scale_map=scale_map,
         )
         self.sample_num = sample_num
