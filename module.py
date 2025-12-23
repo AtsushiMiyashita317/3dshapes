@@ -509,16 +509,17 @@ class CLNF(torch.nn.Module):
 
         # cv = cv + self.eps_p.sqrt() * torch.randn_like(cv)
 
-        input_dim = v.size(-1)
         num_bases = v.size(-2)
+        output_dim = cv.size(-1)
 
         S_pp = torch.einsum('bi,bi->b', cv, cv)
         S_qq = torch.einsum('bni,bji,bjk,bmk->bnm', v, J, J, v)
         S_pq = torch.einsum('bj,bji,bni->bn', cv, J, v)
 
         I = torch.eye(num_bases, device=v.device)
-        norm = S_qq.diagonal(dim1=-2, dim2=-1).mean(dim=-1).clamp_min(1e-9)     # (batch_size,)
-        eps_q = self.eps_q * norm                      # (batch_size,)
+        # norm = S_qq.diagonal(dim1=-2, dim2=-1).mean(dim=-1).clamp_min(1e-9)     # (batch_size,)
+        # eps_q = self.eps_q * norm                      # (batch_size,)
+        eps_q = self.eps_q
         M = S_qq + eps_q.unsqueeze(-1).unsqueeze(-1) * I                        # (batch_size, num_bases, num_bases)
 
         # w^t(eI + v^tv)w= e w^tw + w^tv^tvw
@@ -526,9 +527,8 @@ class CLNF(torch.nn.Module):
 
         L_H = torch.linalg.cholesky(M)
         logdet = 2 * torch.log(torch.diagonal(L_H, dim1=-2, dim2=-1)).sum(-1)
-        logdet = logdet + (input_dim - num_bases) * torch.log(eps_q)
 
-        log_prob = 0.5 * (logdet - trace - input_dim * math.log(2 * math.pi))
+        log_prob = 0.5 * (logdet - trace)
 
         return log_prob
 
@@ -576,7 +576,7 @@ class CLNF(torch.nn.Module):
                 else:
                     self.var_cv.mul_(0.9).add_(0.1 * var)
 
-        # v = v / self.var_v.clamp_min(1e-6).sqrt()
+        v = v / v.square().mean((0,1), keepdim=True).clamp_min(1e-6).sqrt()
         cv = cv / self.var_cv.clamp_min(1e-6).sqrt()
         cv = cv.detach()
 
