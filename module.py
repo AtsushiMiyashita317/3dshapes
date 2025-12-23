@@ -39,6 +39,7 @@ class Autoencoder(torch.nn.Module):
             current_channels //= 2
 
         layers.append(torch.nn.Conv2d(current_channels, latent_dim, kernel_size=1))
+        layers.append(torch.nn.LayerNorm([latent_dim, 1, 1]))
 
         self.encoder = torch.nn.Sequential(*layers)
 
@@ -351,8 +352,7 @@ class CLNF(torch.nn.Module):
     def __init__(
         self, 
         ckpt_predictor,
-        num_bases_sym=66,
-        num_bases_null=66,
+        num_bases=66,
         latent_dim=12,
         autoencoder_layers=3,
         flow_layers=24,
@@ -360,14 +360,15 @@ class CLNF(torch.nn.Module):
         eps_p=1e-3,
         eps_q=1e-1,
         scale_map="exp_clamp",
+        detach_decoder_for_pushforward=True,
     ):
         super().__init__()
 
         self.predictor = PredictorModule.load_from_checkpoint(ckpt_predictor).model.eval()
 
         self.latent_dim = latent_dim
-        self.num_bases_sym = num_bases_sym
-        self.num_bases_null = num_bases_null
+        self.num_bases = num_bases
+        self.detach_decoder_for_pushforward = detach_decoder_for_pushforward
 
         self.autoencoder = Autoencoder(num_post_layers=autoencoder_layers, latent_dim=latent_dim)
 
@@ -390,24 +391,30 @@ class CLNF(torch.nn.Module):
 
         self.flow = nf.NormalizingFlow(base, flows)
 
-        self.W_sym = torch.nn.Parameter(torch.randn(num_bases_sym, input_dim, input_dim) * (1.0 / math.sqrt(input_dim)))
-        self.W_null = torch.nn.Parameter(torch.randn(num_bases_null, input_dim, input_dim) * (1.0 / math.sqrt(input_dim)))
-
-        self.log_var_sym = torch.nn.Parameter(torch.zeros(input_dim))
-        self.log_var_null = torch.nn.Parameter(torch.zeros(input_dim))
+        self.W = torch.nn.Parameter(torch.randn(num_bases, input_dim, input_dim) * (1.0 / math.sqrt(input_dim)))
 
         self.register_buffer('eps_p', torch.tensor(eps_p))
         self.register_buffer('eps_q', torch.tensor(eps_q))
-        self.register_buffer('var_sym', torch.tensor(-1.0))
-        self.register_buffer('var_null', torch.tensor(-1.0))
+        self.register_buffer('var_v', torch.tensor(-1.0))
+        self.register_buffer('var_cv', torch.tensor(-1.0))
+
+        def _pushforward_tangent_single(z: torch.Tensor, v: torch.Tensor):
+            # z: (input_dim,)
+            # v: (input_dim,)
+            z = z.unsqueeze(0)
+            v = v.unsqueeze(0)
+            _, v = torch.func.jvp(self.flow.forward, (z,), (v,))
+            return v.squeeze(0)
+        
+        func = torch.func.vmap(_pushforward_tangent_single, in_dims=(None, 0))
+        self.pushforward_tangent_func = torch.func.vmap(func, in_dims=(0, 0))
+
+        self.jacobian_func = torch.func.vmap(torch.func.jacfwd(self._decode))
 
     def parameters(self, recurse = True):
         yield from self.flow.parameters(recurse)
         yield from self.autoencoder.parameters(recurse)
-        yield self.W_sym
-        yield self.W_null
-        yield self.log_var_sym
-        yield self.log_var_null
+        yield self.W
 
     def encode(self, x):
         z = self.autoencoder.encode(x)
@@ -481,38 +488,45 @@ class CLNF(torch.nn.Module):
         cv = torch.func.vmap(_pullback_cotangent_single)(z, cv)
 
         return cv
+    
+    def pushforward_tangent(self, z: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        # z: (batch_size, input_dim)
+        # v: (batch_size, num_bases, input_dim)
+        v = self.pushforward_tangent_func(z, v)  # (batch_size, num_bases, 3, 64, 64)
+        return v
 
-    def log_prob(self, cv: torch.Tensor, J: torch.Tensor, log_var: torch.Tensor):
+    def log_prob(self, cv: torch.Tensor, v: torch.Tensor):
         """
         Args:
-            cv: (batch_size, input_dim)
-            J: (batch_size, num_bases, input_dim)
+            cv: (batch_size, *)
+            v: (batch_size, num_bases, *)
         Returns:
             log_prob: (batch_size,)
         """
+        cv = cv.reshape(cv.size(0), -1)  # (batch_size, input_dim)
+        v = v.reshape(v.size(0), v.size(1), -1)  # (batch_size, num_bases, input_dim)
 
-        input_dim = J.size(-1)
-        num_bases = J.size(-2)
+        # cv = cv + self.eps_p.sqrt() * torch.randn_like(cv)
 
-        S_q = torch.einsum('bin,bim->bnm', J, J)                        # (batch_size, input_dim, input_dim)
-        # S_q = S_q / num_bases
-        # D = log_var.neg().exp()                                   # (input_dim,)
+        input_dim = v.size(-1)
+        num_bases = v.size(-2)
 
-        I_q = torch.eye(input_dim, device=J.device)                       # (input_dim, input_dim)
-        H = S_q + self.eps_q * I_q                                        # (batch_size, input_dim, input_dim)
+        S_pp = torch.einsum('bi,bi->b', cv, cv)
+        S_qq = torch.einsum('bni,bmi->bnm', v, v)
+        S_pq = torch.einsum('bi,bni->bn', cv, v)
 
-        norm_H = H.diagonal(dim1=-2, dim2=-1).mean(dim=-1).clamp_min(1e-6)
-        H = H + 1e-3 * norm_H.unsqueeze(-1).unsqueeze(-1) * I_q
-        M = self.eps_p + torch.einsum('bi,bi->b', cv, cv)                   # (batch_size,)
+        I = torch.eye(num_bases, device=v.device)
+        norm = S_qq.diagonal(dim1=-2, dim2=-1).mean(dim=-1).clamp_min(1e-9)     # (batch_size,)
+        eps_q = self.eps_q * norm                      # (batch_size,)
+        M = S_qq + eps_q.unsqueeze(-1).unsqueeze(-1) * I                        # (batch_size, num_bases, num_bases)
 
-        cv = cv + self.eps_p.sqrt() * torch.randn_like(cv)
-        trace = torch.einsum('bi,bij,bj->b', cv, H, cv)                # (batch_size,)
+        # w^t(eI + v^tv)w= e w^tw + w^tv^tvw
+        trace = eps_q * S_pp + torch.einsum('bn,bn->b', S_pq, S_pq)  # (batch_size,)
 
-        L_H = torch.linalg.cholesky(H)
+        L_H = torch.linalg.cholesky(M)
         logdet = 2 * torch.log(torch.diagonal(L_H, dim1=-2, dim2=-1)).sum(-1)
-        logdet = logdet + torch.log(M) + (input_dim - 1) * torch.log(self.eps_p)  # (batch_size,)
 
-        log_prob = 0.5 * (logdet - trace - input_dim * math.log(2 * math.pi))  # (batch_size,)
+        log_prob = 0.5 * (logdet - trace)
 
         return log_prob
 
@@ -533,43 +547,41 @@ class CLNF(torch.nn.Module):
 
         cv = torch.randn(x.size(0), 5, device=x.device)  # (B, output_dim)
         cv = self.sample_cotangent(x.detach(), cv)  # (B, input_dim)
-        cv_sym = self.encode_cotangent(y, cv.detach())  # (B, input_dim)
-        cv = torch.randn_like(x)
-        cv_null = self.encode_cotangent(y, cv)  # (B, input_dim)
-        cv_sym = cv_sym.detach()
-        cv_null = cv_null.detach()
+
+        L = self.W - self.W.mT  # (num_bases, input_dim, input_dim)
+        # L = L / L.square().mean(dim=(-2, -1), keepdim=True).clamp_min(1e-6).sqrt()
+        # L = L / L.size(-1) ** 0.5
+        v = torch.einsum('bi,mji->bmj', z, L)  # (B, num_bases, input_dim)
+        
+        v = self.pushforward_tangent(z, v)  # (B, num_bases, input_dim)
+
+        if self.detach_decoder_for_pushforward:
+            with torch.no_grad():
+                J = self.jacobian_func(y)  # (B, input_dim, 3, 64, 64)
+        else:
+            J = self.jacobian_func(y)  # (B, input_dim, 3, 64, 64)
+        v = torch.einsum('bni,b...i->bn...', v, J)  # (B, num_bases, 3, 64, 64)
 
         if self.training:
             with torch.no_grad():
-                var_sym = cv_sym.square().mean()
-                if self.var_sym.item() < 0:
-                    self.var_sym.copy_(var_sym)
+                var = v.square().mean((0,1)).sum()
+                if self.var_v.item() < 0:
+                    self.var_v.copy_(var)
                 else:
-                    self.var_sym.mul_(0.9).add_(0.1 * var_sym)
-                var_null = cv_null.square().mean().sqrt().clamp_min(1e-3)
-                if self.var_null.item() < 0:
-                    self.var_null.copy_(var_null)
+                    self.var_v.mul_(0.9).add_(0.1 * var)
+                var = cv.square().mean(0).sum()
+                if self.var_cv.item() < 0:
+                    self.var_cv.copy_(var)
                 else:
-                    self.var_null.mul_(0.9).add_(0.1 * var_null)
+                    self.var_cv.mul_(0.9).add_(0.1 * var)
 
-        cv_sym = cv_sym / self.var_sym.clamp_min(1e-6).sqrt()
-        cv_null = cv_null / self.var_null.clamp_min(1e-6).sqrt()
-        cv_sym = self.pullback_cotangent(z, cv_sym)  # (B, input_dim)
-        cv_null = self.pullback_cotangent(z, cv_null)  # (B, input_dim)
+        # v = v / self.var_v.clamp_min(1e-6).sqrt()
+        cv = cv / self.var_cv.clamp_min(1e-6).sqrt()
+        cv = cv.detach()
 
-        L = self.W_sym - self.W_sym.mT  # (num_bases, input_dim, input_dim)
-        L = L / L.square().mean(dim=(-2, -1), keepdim=True).clamp_min(1e-6).sqrt()
-        L = L / L.size(-1) ** 0.5
-        J_sym = torch.einsum('bi,mji->bmj', z, L)  # (B, num_bases, input_dim)
-        L = self.W_null - self.W_null.mT  # (num_bases, input_dim, input_dim)
-        L = L / L.square().mean(dim=(-2, -1), keepdim=True).clamp_min(1e-6).sqrt()
-        L = L / L.size(-1) ** 0.5
-        J_null = torch.einsum('bi,mji->bmj', z, L)  # (B, num_null, input_dim)
+        log_prob_cotangent = self.log_prob(cv, v)  # (B,)
 
-        log_prob_sym = self.log_prob(cv_sym, J_sym, self.log_var_sym)  # (B,)
-        log_prob_null = self.log_prob(cv_null, J_null, self.log_var_null)  # (B,)
-
-        return x, log_prob_data, log_prob_sym, log_prob_null
+        return x, log_prob_data, log_prob_cotangent
 
 
 class CLNFModule(pl.LightningModule):
@@ -579,8 +591,7 @@ class CLNFModule(pl.LightningModule):
         lr=1e-3,
         beta=10.0,
         sample_num=64,
-        num_bases_sym=66,
-        num_bases_null=66,
+        num_bases=66,
         latent_dim=12,
         autoencoder_layers=3,
         flow_layers=24,
@@ -588,12 +599,12 @@ class CLNFModule(pl.LightningModule):
         eps_p=1e-3,
         eps_q=1e-1,
         scale_map="exp_clamp",
+        detach_decoder_for_pushforward=True,
     ):
         super().__init__()
         self.model = CLNF(
             ckpt_predictor,
-            num_bases_sym=num_bases_sym,
-            num_bases_null=num_bases_null,
+            num_bases=num_bases,
             latent_dim=latent_dim,
             autoencoder_layers=autoencoder_layers,
             flow_layers=flow_layers,
@@ -601,6 +612,7 @@ class CLNFModule(pl.LightningModule):
             eps_p=eps_p,
             eps_q=eps_q,
             scale_map=scale_map,
+            detach_decoder_for_pushforward=detach_decoder_for_pushforward,
         )
         self.sample_num = sample_num
 
@@ -621,33 +633,31 @@ class CLNFModule(pl.LightningModule):
                 wandb_logger.experiment.log({f"val_generated/sample": wandb.Image(grid, caption=f"epoch {self.current_epoch}")})
 
     def training_step(self, batch, batch_idx):
-        recon, log_prob_data, log_prob_sym, log_prob_null = self.model.forward(batch)
+        recon, log_prob_data, log_prob_cotangent = self.model.forward(batch)
         log_prob_data = log_prob_data.mean()
-        log_prob_sym = log_prob_sym.mean()
-        log_prob_null = log_prob_null.mean()
-        nll_loss = - (log_prob_data + log_prob_sym + log_prob_null)
+        log_prob_cotangent = log_prob_cotangent.mean()
+        nll_loss = - (log_prob_data + log_prob_cotangent)
         recon_loss = torch.nn.functional.mse_loss(recon, batch)
         loss = nll_loss + self.beta * recon_loss
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
         self.log('train_log_prob_data', log_prob_data, on_step=True, on_epoch=True, prog_bar=False)
-        self.log('train_log_prob_sym', log_prob_sym, on_step=True, on_epoch=True, prog_bar=False)
-        self.log('train_log_prob_null', log_prob_null, on_step=True, on_epoch=True, prog_bar=False)
+        self.log('train_log_prob_cotangent', log_prob_cotangent, on_step=True, on_epoch=True, prog_bar=False)
         self.log('train_recon_loss', recon_loss, on_step=True, on_epoch=True, prog_bar=False)
         self.log('train_nll', nll_loss, on_step=True, on_epoch=True, prog_bar=False)
+        self.log('train_var_v', self.model.var_v, on_step=True, on_epoch=True, prog_bar=False)
+        self.log('train_var_cv', self.model.var_cv, on_step=True, on_epoch=True, prog_bar=False)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        recon, log_prob_data, log_prob_sym, log_prob_null = self.model.forward(batch)
+        recon, log_prob_data, log_prob_cotangent = self.model.forward(batch)
         log_prob_data = log_prob_data.mean()
-        log_prob_sym = log_prob_sym.mean()
-        log_prob_null = log_prob_null.mean()
-        nll_loss = - (log_prob_data + log_prob_sym + log_prob_null)
+        log_prob_cotangent = log_prob_cotangent.mean()
+        nll_loss = - (log_prob_data + log_prob_cotangent)
         recon_loss = torch.nn.functional.mse_loss(recon, batch)
         loss = nll_loss + self.beta * recon_loss
         self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('val_log_prob_data', log_prob_data, on_step=False, on_epoch=True, prog_bar=False)
-        self.log('val_log_prob_sym', log_prob_sym, on_step=False, on_epoch=True, prog_bar=False)
-        self.log('val_log_prob_null', log_prob_null, on_step=False, on_epoch=True, prog_bar=False)
+        self.log('val_log_prob_cotangent', log_prob_cotangent, on_step=False, on_epoch=True, prog_bar=False)
         self.log('val_recon_loss', recon_loss, on_step=False, on_epoch=True, prog_bar=False)
         self.log('val_nll', nll_loss, on_step=False, on_epoch=True, prog_bar=False)
         return loss
