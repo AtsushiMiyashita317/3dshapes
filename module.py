@@ -623,7 +623,7 @@ class CLNFModule(pl.LightningModule):
             if hasattr(wandb_logger, "experiment"):
                 wandb_logger.experiment.log({f"val_generated/sample": wandb.Image(grid, caption=f"epoch {self.current_epoch}")})
 
-            L = self.model.W - self.model.W.mT
+            L = self.model.W_sym - self.model.W_sym.mT
             L = L / L.square().sum((-2, -1), keepdim=True).sqrt()
 
             u, s, vh = torch.linalg.svd(L.flatten(1, 2), full_matrices=False)
