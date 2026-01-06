@@ -4,6 +4,7 @@ import torchvision as tv
 import wandb
 import normflows as nf
 import math
+from matplotlib import pyplot as plt
 
 class Autoencoder(torch.nn.Module):
     def __init__(self, num_post_layers=3, latent_dim=12):
@@ -621,6 +622,42 @@ class CLNFModule(pl.LightningModule):
             wandb_logger = self.logger
             if hasattr(wandb_logger, "experiment"):
                 wandb_logger.experiment.log({f"val_generated/sample": wandb.Image(grid, caption=f"epoch {self.current_epoch}")})
+
+            L = self.model.W - self.model.W.mT
+            L = L / L.square().sum((-2, -1), keepdim=True).sqrt()
+
+            u, s, vh = torch.linalg.svd(L.flatten(1, 2), full_matrices=False)
+
+            fig, ax = plt.subplots()
+            ax.plot(s.detach().cpu().numpy())
+            ax.set_title('Singular values of learned symmetry generators')
+            ax.set_xlabel('Index')
+            ax.set_ylabel('Singular value')
+            
+            if hasattr(wandb_logger, "experiment"):
+                wandb_logger.experiment.log({f"val_generated/singular_values": wandb.Image(fig, caption=f"epoch {self.current_epoch}")})
+            plt.close(fig)
+
+            L = vh[:self.sample_num].reshape(-1, L.size(1), L.size(2))
+            n = L.size(0)
+            ncol = min(8, n)
+            nrow = math.ceil(n / ncol)
+
+            fig, ax = plt.subplots(nrow, ncol, figsize=(4*ncol, 4*nrow))
+            ax = ax.flatten()
+            vmax = L.abs().max().item()
+            vmin = -vmax
+
+            for i in range(L.size(0)):
+                im = ax[i].imshow(L[i].detach().cpu().numpy(), cmap='bwr', vmin=vmin, vmax=vmax)
+                ax[i].set_title(f'Generator {i+1}')
+                ax[i].set_xticks([])
+                ax[i].set_yticks([])
+                fig.colorbar(im, ax=ax[i])
+
+            if hasattr(wandb_logger, "experiment"):
+                wandb_logger.experiment.log({f"val_generated/symmetry_generators": wandb.Image(fig, caption=f"epoch {self.current_epoch}")})
+            plt.close(fig)
 
     def training_step(self, batch, batch_idx):
         recon, log_prob_data, log_prob_sym, log_prob_null = self.model.forward(batch)
