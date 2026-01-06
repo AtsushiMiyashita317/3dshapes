@@ -624,7 +624,6 @@ class CLNFModule(pl.LightningModule):
                 wandb_logger.experiment.log({f"val_generated/sample": wandb.Image(grid, caption=f"epoch {self.current_epoch}")})
 
             L = self.model.W_sym - self.model.W_sym.mT
-            L = L / L.square().sum((-2, -1), keepdim=True).sqrt()
 
             u, s, vh = torch.linalg.svd(L.flatten(1, 2), full_matrices=False)
 
@@ -645,11 +644,9 @@ class CLNFModule(pl.LightningModule):
 
             fig, ax = plt.subplots(nrow, ncol, figsize=(4*ncol, 4*nrow))
             ax = ax.flatten()
-            vmax = L.abs().max().item()
-            vmin = -vmax
 
             for i in range(L.size(0)):
-                im = ax[i].imshow(L[i].detach().cpu().numpy(), cmap='bwr', vmin=vmin, vmax=vmax)
+                im = ax[i].imshow(L[i].detach().cpu().numpy(), cmap='bwr')
                 ax[i].set_title(f'Generator {i+1}')
                 ax[i].set_xticks([])
                 ax[i].set_yticks([])
