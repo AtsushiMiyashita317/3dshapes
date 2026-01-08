@@ -35,54 +35,66 @@ def main(args):
     print(dataset.keys())
     images = dataset['images'][:]
     n_samples = images.shape[0]
+    sample_image = images[12000]
 
-    # データ分割（1:5）
-    indices = np.arange(n_samples)
     np.random.seed(42)
-    np.random.shuffle(indices)
-    split = int(n_samples / 6)
-    val_idx, train_idx = indices[:split], indices[split:]
-    
-    # Set up model
     torch.manual_seed(0)
     
     # LightningModule化
     pl_model = CLNFModule(
-        sample_num=args.sample_num,
-        lr=args.lr,
         ckpt_predictor=args.ckpt_predictor,
-        num_bases=args.num_bases,
-        latent_dim=args.latent_dim,
-        autoencoder_layers=args.autoencoder_layers,
+        ckpt_autoencoder=args.ckpt_autoencoder,
         flow_layers=args.flow_layers,
         flow_hidden_dim=args.flow_hidden_dim,
-        log_var_init=args.log_var_init,
-        eps_p=args.eps_p,
-        eps_q=args.eps_q,
+        scale_map=args.scale_map,
+        num_bases_sym=args.num_bases_sym,
+        num_bases_null=args.num_bases_null,
+        eps_p_sym=args.eps_p_sym,
+        eps_q_sym=args.eps_q_sym,
+        eps_p_null=args.eps_p_null,
+        eps_q_null=args.eps_q_null,
+        normalize_generators=args.normalize_generators,
+        normalize_precision=args.normalize_precision,
+        rescale_eps=args.rescale_eps,
+        lr=args.lr,
+        sample_image=sample_image,
+        sample_num=args.sample_num,
+        generator_num=args.generator_num,
+        repr_dims=args.repr_dims,
     )
 
     # DataLoader
-    train_data = Dataset3DShapes(images, train_idx)
-    val_data = Dataset3DShapes(images, val_idx)
+    indices = np.arange(n_samples)
+    train_data = Dataset3DShapes(images, indices)
+    val_data = Dataset3DShapes(images, indices)
     train_loader = torch.utils.data.DataLoader(
         train_data, batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=args.num_workers)
     val_loader = torch.utils.data.DataLoader(
-        val_data, batch_size=args.batch_size // 5, shuffle=False, num_workers=args.num_workers)
+        val_data, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     # wandb logger
     wandb_logger = WandbLogger(project=args.project)
 
-    wandb_logger.log_hyperparams({
-        "lr": args.lr,
-        "num_bases": args.num_bases,
-        "latent_dim": args.latent_dim,
-        "autoencoder_layers": args.autoencoder_layers,
-        "flow_layers": args.flow_layers,
-        "flow_hidden_dim": args.flow_hidden_dim,
-        "log_var_init": args.log_var_init,
-        "eps_p": args.eps_p,
-        "eps_q": args.eps_q,
-    })
+    wandb_logger.log_hyperparams(dict(
+        ckpt_predictor=args.ckpt_predictor,
+        ckpt_autoencoder=args.ckpt_autoencoder,
+        flow_layers=args.flow_layers,
+        flow_hidden_dim=args.flow_hidden_dim,
+        scale_map=args.scale_map,
+        num_bases_sym=args.num_bases_sym,
+        num_bases_null=args.num_bases_null,
+        eps_p_sym=args.eps_p_sym,
+        eps_q_sym=args.eps_q_sym,
+        eps_p_null=args.eps_p_null,
+        eps_q_null=args.eps_q_null,
+        normalize_generators=args.normalize_generators,
+        normalize_precision=args.normalize_precision,
+        rescale_eps=args.rescale_eps,
+        lr=args.lr,
+        sample_num=args.sample_num,
+        generator_num=args.generator_num,
+        repr_dims=args.repr_dims,
+    ))
 
     # ModelCheckpointコールバック
     checkpoint_callback = ModelCheckpoint(
@@ -92,6 +104,17 @@ def main(args):
         save_top_k=1,
         save_last=True,
         mode="min",
+        save_weights_only=False,
+        verbose=True
+    )
+
+    # 500エポックごとに保存するModelCheckpointコールバック
+    periodic_checkpoint_callback = ModelCheckpoint(
+        dirpath=wandb_logger.experiment.dir if type(wandb_logger.experiment.dir) is str else args.ckpt_dir,
+        filename="epoch{epoch:04d}",
+        every_n_epochs=500,
+        save_top_k=-1,
+        save_last=False,
         save_weights_only=False,
         verbose=True
     )
@@ -110,7 +133,7 @@ def main(args):
         strategy=strategy,
         check_val_every_n_epoch=args.val_interval,
         logger=wandb_logger,
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback, periodic_checkpoint_callback],
         enable_checkpointing=True
     )
     trainer.fit(pl_model, train_loader, val_loader, ckpt_path=args.resume)
@@ -118,10 +141,27 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    # parser.add_argument('ckpt_autoencoder', type=str, help='Path to pretrained autoencoder checkpoint')
     parser.add_argument('ckpt_predictor', type=str, help='Path to pretrained predictor checkpoint')
-    parser.add_argument('--num_bases', type=int, default=66, help='Number of bases')
-    parser.add_argument('--latent_dim', type=int, default=12, help='Latent dimension of autoencoder')
+    parser.add_argument('ckpt_autoencoder', type=str, help='Path to pretrained autoencoder checkpoint')
+    # flow parameters
+    parser.add_argument('--flow_layers', type=int, default=24, help='Number of layers in normalizing flow')
+    parser.add_argument('--flow_hidden_dim', type=int, default=192, help='Hidden dimension of flow networks')
+    parser.add_argument('--scale_map', type=str, default='exp_clamp', help='Scale map for flow (exp, exp_clamp)')
+    # symmetry parameters
+    parser.add_argument('--num_bases_sym', type=int, default=None, help='Number of bases for symmetric part')
+    parser.add_argument('--num_bases_null', type=int, default=None, help='Number of bases for null part')
+    parser.add_argument('--eps_p_sym', type=float, default=1e-3, help='Epsilon p for symmetric part')
+    parser.add_argument('--eps_q_sym', type=float, default=1e-1, help='Epsilon q for symmetric part')
+    parser.add_argument('--eps_p_null', type=float, default=1e-3, help='Epsilon p for null part')
+    parser.add_argument('--eps_q_null', type=float, default=1e-1, help='Epsilon q for null part')
+    parser.add_argument('--normalize_generators', action='store_true', help='Whether to normalize generators during training')
+    parser.add_argument('--normalize_precision', action='store_true', help='Whether to normalize precision matrices during training')
+    parser.add_argument('--rescale_eps', action='store_true', help='Whether to rescale epsilons during training')
+    # plot parameters
+    parser.add_argument('--sample_num', type=int, default=64, help='Number of generated images per validation')
+    parser.add_argument('--generator_num', type=int, default=64, help='Number of generators to estimate')
+    parser.add_argument('--repr_dims', type=int, nargs='+', default=[7,8,9,24], help='Representation dimensions to analyze')
+    # training parameters
     parser.add_argument('--batch_size', type=int, default=1000, help='Batch size')
     parser.add_argument('--autoencoder_layers', type=int, default=3, help='Number of post layers in autoencoder')
     parser.add_argument('--flow_layers', type=int, default=24, help='Number of layers in normalizing flow')
@@ -131,8 +171,7 @@ if __name__ == "__main__":
     parser.add_argument('--eps_q', type=float, default=1e-1, help='Epsilon q for conditional AE')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--max_epochs', type=int, default=5000, help='Max training steps')
-    parser.add_argument('--val_interval', type=int, default=50, help='Validation interval in steps')
-    parser.add_argument('--sample_num', type=int, default=64, help='Number of generated images per validation')
+    parser.add_argument('--val_interval', type=int, default=10, help='Validation interval in steps')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of DataLoader workers')
     parser.add_argument('--project', type=str, default='3dshapes-clnf', help='wandb project name')
     parser.add_argument('--ckpt_dir', type=str, default='checkpoints/clnf', help='Checkpoint directory')
