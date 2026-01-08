@@ -414,14 +414,15 @@ class CLNF(torch.nn.Module):
             self.W_sym = torch.nn.Parameter(torch.randn(num_bases_sym, input_dim, input_dim) * (1.0 / math.sqrt(input_dim)))
             self.register_buffer('eps_p_sym', torch.tensor(eps_p_sym))
             self.register_buffer('eps_q_sym', torch.tensor(eps_q_sym))
-            self.register_buffer('var_sym', torch.tensor(-1.0))
         if num_bases_null is None:
             self.W_null = None
         else:
             self.W_null = torch.nn.Parameter(torch.randn(num_bases_null, input_dim, input_dim) * (1.0 / math.sqrt(input_dim)))
             self.register_buffer('eps_p_null', torch.tensor(eps_p_null))
             self.register_buffer('eps_q_null', torch.tensor(eps_q_null))
-            self.register_buffer('var_null', torch.tensor(-1.0))
+
+        self.register_buffer('var_sym', torch.tensor(-1.0))
+        self.register_buffer('var_null', torch.tensor(-1.0))
 
     def parameters(self, recurse = True):
         yield from self.flow.parameters(recurse)
@@ -563,25 +564,37 @@ class CLNF(torch.nn.Module):
         z, logdet = self.flow.inverse_and_log_det(y)
         log_prob_data = self.flow.q0.log_prob(z) + logdet  # (B,)
 
-        output_dict = dict(z=z, x=x, log_prob_data=log_prob_data)
+        cv = torch.randn(x.size(0), 5, device=x.device)  # (B, output_dim)
+        cv = self.sample_cotangent(x.detach(), cv)  # (B, input_dim)
+        cv_sym = self.encode_cotangent(y, cv.detach())  # (B, input_dim)
+        cv_sym = cv_sym.detach()
+        cv = torch.randn_like(x)
+        cv_null = self.encode_cotangent(y, cv)  # (B, input_dim)
+        cv_null = cv_null.detach()
+
+        if self.training:
+            with torch.no_grad():
+                var_sym = cv_sym.square().mean()
+                if self.var_sym.item() < 0:
+                    self.var_sym.copy_(var_sym)
+                else:
+                    self.var_sym.mul_(0.9).add_(0.1 * var_sym)
+
+                var_null = cv_null.square().mean()
+                if self.var_null.item() < 0:
+                    self.var_null.copy_(var_null)
+                else:
+                    self.var_null.mul_(0.9).add_(0.1 * var_null)
+        
+        cv_sym = cv_sym / self.var_sym.clamp_min(1e-6).sqrt()
+        cv_sym = self.pullback_cotangent(z, cv_sym)  # (B, input_dim)
+
+        cv_null = cv_null / self.var_null.clamp_min(1e-6).sqrt()
+        cv_null = self.pullback_cotangent(z, cv_null)  # (B, input_dim)
+
+        output_dict = dict(z=z, x=x, cv_sym=cv_sym, cv_null=cv_null, log_prob_data=log_prob_data)
 
         if self.W_sym is not None:
-            cv = torch.randn(x.size(0), 5, device=x.device)  # (B, output_dim)
-            cv = self.sample_cotangent(x.detach(), cv)  # (B, input_dim)
-            cv_sym = self.encode_cotangent(y, cv.detach())  # (B, input_dim)
-            cv_sym = cv_sym.detach()
-
-            if self.training:
-                with torch.no_grad():
-                    var_sym = cv_sym.square().mean()
-                    if self.var_sym.item() < 0:
-                        self.var_sym.copy_(var_sym)
-                    else:
-                        self.var_sym.mul_(0.9).add_(0.1 * var_sym)
-            
-            cv_sym = cv_sym / self.var_sym.clamp_min(1e-6).sqrt()
-            cv_sym = self.pullback_cotangent(z, cv_sym)  # (B, input_dim)
-
             L = (self.W_sym - self.W_sym.mT) / 2  # (num_bases, input_dim, input_dim)
             if self.normalize_generators:
                 L = L / L.square().mean(dim=(-2, -1), keepdim=True).clamp_min(1e-6).sqrt()
@@ -589,24 +602,9 @@ class CLNF(torch.nn.Module):
             J_sym = torch.einsum('bi,mji->bmj', z, L)  # (B, num_bases, input_dim)
             log_prob_sym = self.log_prob(cv_sym, J_sym, self.eps_p_sym, self.eps_q_sym)  # (B,)
 
-            output_dict.update(cv_sym=cv_sym, log_prob_sym=log_prob_sym)
+            output_dict.update(log_prob_sym=log_prob_sym)
 
         if self.W_null is not None:
-            cv = torch.randn_like(x)
-            cv_null = self.encode_cotangent(y, cv)  # (B, input_dim)
-            cv_null = cv_null.detach()
-
-            if self.training:
-                with torch.no_grad():
-                    var_null = cv_null.square().mean()
-                    if self.var_null.item() < 0:
-                        self.var_null.copy_(var_null)
-                    else:
-                        self.var_null.mul_(0.9).add_(0.1 * var_null)
-
-            cv_null = cv_null / self.var_null.clamp_min(1e-6).sqrt()
-            cv_null = self.pullback_cotangent(z, cv_null)  # (B, input_dim)
-            
             L = (self.W_null - self.W_null.mT) / 2  # (num_bases, input_dim, input_dim)
             if self.normalize_generators:
                 L = L / L.square().mean(dim=(-2, -1), keepdim=True).clamp_min(1e-6).sqrt()
@@ -615,7 +613,7 @@ class CLNF(torch.nn.Module):
 
             log_prob_null = self.log_prob(cv_null, J_null, self.eps_p_null, self.eps_q_null)  # (B,)
 
-            output_dict.update(cv_null=cv_null, log_prob_null=log_prob_null)
+            output_dict.update(log_prob_null=log_prob_null)
 
         return output_dict
 
@@ -913,7 +911,7 @@ class CLNFModule(pl.LightningModule):
                 self._plot_line(output_dict['l'], title="analyzed/cotangent/eigenvalues")
 
                 for repr_dim in self.repr_dims:
-                    if self.model.W_sym is not None:
+                    if 'cov_sym_proj' in output_dict:
                         l_sym, generators_sym = self._compute_generators(
                             output_dict['cov_sym_proj'], output_dict['basis'], repr_dim)
                         curve_sym = self.lie_algebra_loss_curve(generators_sym)
@@ -924,7 +922,7 @@ class CLNFModule(pl.LightningModule):
                         self._plot_samples(x_sym, nrow=9, title=f'analyzed/sym/repr_{repr_dim}')
                         self._plot_generators(generators_sym, title=f'analyzed/sym/repr_{repr_dim}')
 
-                    if self.model.W_null is not None:
+                    if 'cov_null_proj' in output_dict:
                         l_null, generators_null = self._compute_generators(
                             output_dict['cov_null_proj'], output_dict['basis'], repr_dim)
                         curve_null = self.lie_algebra_loss_curve(generators_null)
