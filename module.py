@@ -687,16 +687,18 @@ class CLNFModule(pl.LightningModule):
             print(f"Skipping batch {batch_idx} due to error: {e}")
             return None
         log_prob_data = output_dict['log_prob_data'].mean()
-        log_prob_sym = output_dict['log_prob_sym'].mean()
-        log_prob_null = output_dict['log_prob_null'].mean()
-        nll_loss = - (log_prob_data + log_prob_sym + log_prob_null)
+        self.log('train_log_prob_data', log_prob_data, on_step=False, on_epoch=True, prog_bar=False)
+        loss = -log_prob_data
+        if 'log_prob_sym' in output_dict:
+            log_prob_sym = output_dict['log_prob_sym'].mean()
+            self.log('train_log_prob_sym', log_prob_sym, on_step=False, on_epoch=True, prog_bar=False)
+            loss = loss - log_prob_sym
+        if 'log_prob_null' in output_dict:
+            log_prob_null = output_dict['log_prob_null'].mean()
+            self.log('train_log_prob_null', log_prob_null, on_step=False, on_epoch=True, prog_bar=False)
+            loss = loss - log_prob_null
         
-        loss = nll_loss
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log('train_log_prob_data', log_prob_data, on_step=True, on_epoch=True, prog_bar=False)
-        self.log('train_log_prob_sym', log_prob_sym, on_step=True, on_epoch=True, prog_bar=False)
-        self.log('train_log_prob_null', log_prob_null, on_step=True, on_epoch=True, prog_bar=False)
-        self.log('train_nll', nll_loss, on_step=True, on_epoch=True, prog_bar=False)
+        self.log('train_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
         return loss
     
     def validation_step(self, batch, batch_idx):
@@ -706,15 +708,18 @@ class CLNFModule(pl.LightningModule):
             print(f"Skipping batch {batch_idx} due to error: {e}")
             return None
         log_prob_data = output_dict['log_prob_data'].mean()
-        log_prob_sym = output_dict['log_prob_sym'].mean()
-        log_prob_null = output_dict['log_prob_null'].mean()
-        nll_loss = - (log_prob_data + log_prob_sym + log_prob_null)
-        loss = nll_loss
-        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('val_log_prob_data', log_prob_data, on_step=False, on_epoch=True, prog_bar=False)
-        self.log('val_log_prob_sym', log_prob_sym, on_step=False, on_epoch=True, prog_bar=False)
-        self.log('val_log_prob_null', log_prob_null, on_step=False, on_epoch=True, prog_bar=False)
-        self.log('val_nll', nll_loss, on_step=False, on_epoch=True, prog_bar=False)
+        loss = -log_prob_data
+        if 'log_prob_sym' in output_dict:
+            log_prob_sym = output_dict['log_prob_sym'].mean()
+            self.log('val_log_prob_sym', log_prob_sym, on_step=False, on_epoch=True, prog_bar=False)
+            loss = loss - log_prob_sym
+        if 'log_prob_null' in output_dict:
+            log_prob_null = output_dict['log_prob_null'].mean()
+            self.log('val_log_prob_null', log_prob_null, on_step=False, on_epoch=True, prog_bar=False)
+            loss = loss - log_prob_null
+
+        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
 
         self._update_stats(
             output_dict.get('z'),
