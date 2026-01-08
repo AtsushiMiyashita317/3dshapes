@@ -173,7 +173,7 @@ if __name__ == "__main__":
     parser.add_argument('--max_epochs', type=int, default=5000, help='Max training steps')
     parser.add_argument('--val_interval', type=int, default=10, help='Validation interval in steps')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of DataLoader workers')
-    parser.add_argument('--project', type=str, default='3dshapes-clnf', help='wandb project name')
+    parser.add_argument('--project', type=str, default='3dshapes-cotflow', help='wandb project name')
     parser.add_argument('--ckpt_dir', type=str, default='checkpoints/clnf', help='Checkpoint directory')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     parser.add_argument('--strategy', type=str, default='auto', help='Distributed training strategy (ddp, ddp_spawn, etc)')
