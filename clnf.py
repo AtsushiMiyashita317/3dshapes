@@ -73,7 +73,7 @@ def main(args):
         val_data, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     # wandb logger
-    wandb_logger = WandbLogger(project=args.project)
+    wandb_logger = WandbLogger(project=args.project, name=args.run_name)
 
     wandb_logger.log_hyperparams(dict(
         ckpt_predictor=args.ckpt_predictor,
@@ -168,6 +168,7 @@ if __name__ == "__main__":
     parser.add_argument('--val_interval', type=int, default=10, help='Validation interval in steps')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of DataLoader workers')
     parser.add_argument('--project', type=str, default='3dshapes-cotflow', help='wandb project name')
+    parser.add_argument('--run_name', type=str, default='clnf_run', help='wandb run name')
     parser.add_argument('--ckpt_dir', type=str, default='checkpoints/clnf', help='Checkpoint directory')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     parser.add_argument('--strategy', type=str, default='auto', help='Distributed training strategy (ddp, ddp_spawn, etc)')
