@@ -163,12 +163,6 @@ if __name__ == "__main__":
     parser.add_argument('--repr_dims', type=int, nargs='+', default=[7,8,9,24], help='Representation dimensions to analyze')
     # training parameters
     parser.add_argument('--batch_size', type=int, default=1000, help='Batch size')
-    parser.add_argument('--autoencoder_layers', type=int, default=3, help='Number of post layers in autoencoder')
-    parser.add_argument('--flow_layers', type=int, default=24, help='Number of layers in normalizing flow')
-    parser.add_argument('--flow_hidden_dim', type=int, default=192, help='Hidden dimension of flow networks')
-    parser.add_argument('--log_var_init', type=float, default=0.0, help='Initial log variance for conditional AE')
-    parser.add_argument('--eps_p', type=float, default=1e-3, help='Epsilon p for conditional AE')
-    parser.add_argument('--eps_q', type=float, default=1e-1, help='Epsilon q for conditional AE')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--max_epochs', type=int, default=5000, help='Max training steps')
     parser.add_argument('--val_interval', type=int, default=10, help='Validation interval in steps')
