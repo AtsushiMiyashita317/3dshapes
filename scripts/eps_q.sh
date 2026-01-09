@@ -19,7 +19,7 @@ lr=0.004
 num_bases_sym=276
 num_bases_null=276
 eps_p_sym=0.001
-eps_q_sym=$1
+eps_q_sym=$eps_q
 eps_p_null=0.001
 eps_q_null=0.1
 
