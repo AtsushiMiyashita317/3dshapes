@@ -736,7 +736,7 @@ class CLNFModule(pl.LightningModule):
     def _update_stats(self, z: torch.Tensor, cv_sym: torch.Tensor, cv_null: torch.Tensor):
         batch_size = z.size(0)
         z = z.detach()
-        cov_cotangent = torch.einsum('bi,bj->ij', z, z)
+        cov_cotangent = torch.einsum('bi,bj->ij', cv_null, cv_null)
         if cv_sym is not None:
             cv_sym = cv_sym.detach()
             cov_sym = torch.einsum('bi,bj,bk,bl->ijkl', cv_sym, z, cv_sym, z)
