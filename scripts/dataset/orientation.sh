@@ -18,7 +18,7 @@ run_name="orientation"
 
 source venv/bin/activate
 
-python predictor.py \   
+python predictor.py \
     --removed_factors ${removed_factors} \
     --batch_size ${batch_size} \
     --max_steps ${max_steps} \
@@ -29,7 +29,7 @@ python autoencoder.py \
     --removed_factors ${removed_factors} \
     --batch_size ${batch_size} \
     --max_steps ${max_steps} \
-    --num_postlayers 2 \
+    --num_post_layers 2 \
     --latent_dim 24 \
     --num_workers ${num_workers} \
     --run_name ${run_name}

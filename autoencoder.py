@@ -58,7 +58,7 @@ def main(args):
     train_data = Dataset3DShapes(images=images, indices=train_idx)
     val_data = Dataset3DShapes(images=images, indices=val_idx)
     train_loader = torch.utils.data.DataLoader(
-        train_data, batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=args.num_workers)
+        train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     val_loader = torch.utils.data.DataLoader(
         val_data, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
