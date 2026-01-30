@@ -12,21 +12,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 import wandb
 from module import CLNFModule
-
-
-class Dataset3DShapes(torch.utils.data.Dataset):
-    def __init__(self, images, indices):
-        self.images = images
-        self.indices = indices
-
-    def __len__(self):
-        return len(self.indices)
-
-    def __getitem__(self, idx):
-        img = self.images[self.indices[idx]]
-        img = torch.from_numpy(img).permute(2, 0, 1).float()
-        img = img / 255.0
-        return img
+from dataset import Dataset3DShapes
 
 
 def main(args):
@@ -65,8 +51,8 @@ def main(args):
 
     # DataLoader
     indices = np.arange(n_samples)
-    train_data = Dataset3DShapes(images, indices)
-    val_data = Dataset3DShapes(images, indices)
+    train_data = Dataset3DShapes(images=images, indices=indices)
+    val_data = Dataset3DShapes(images=images, indices=indices)
     train_loader = torch.utils.data.DataLoader(
         train_data, batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=args.num_workers)
     val_loader = torch.utils.data.DataLoader(
@@ -141,6 +127,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument('--removed_factors', type=str, nargs='+', default=[], help='Factors to remove from the dataset. Options: floor_hue, wall_hue, object_hue, scale, shape, orientation')
+    
     parser.add_argument('ckpt_predictor', type=str, help='Path to pretrained predictor checkpoint')
     parser.add_argument('ckpt_autoencoder', type=str, help='Path to pretrained autoencoder checkpoint')
     # flow parameters

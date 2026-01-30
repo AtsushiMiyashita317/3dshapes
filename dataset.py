@@ -2,7 +2,7 @@ import torch
 
 
 class Dataset3DShapes(torch.utils.data.Dataset):
-    def __init__(self, images, labels, indices):
+    def __init__(self, images=None, labels=None, indices=None):
         self.images = images
         self.labels = labels
         self.indices = indices
@@ -14,6 +14,9 @@ class Dataset3DShapes(torch.utils.data.Dataset):
         img = self.images[self.indices[idx]]
         img = torch.from_numpy(img).permute(2, 0, 1).float()
         img = img / 255.0
+
+        if self.labels is None:
+            return img
 
         label = self.labels[self.indices[idx]]
         label = torch.from_numpy(label).float()

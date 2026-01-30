@@ -12,58 +12,62 @@ from pytorch_lightning.loggers import WandbLogger
 import wandb
 from module import Autoencoder, AutoencoderModule
 
-
-class Dataset3DShapes(torch.utils.data.Dataset):
-    def __init__(self, images, indices):
-        self.images = images
-        self.indices = indices
-
-    def __len__(self):
-        return len(self.indices)
-
-    def __getitem__(self, idx):
-        img = self.images[self.indices[idx]]
-        img = torch.from_numpy(img).permute(2, 0, 1).float()
-        img = img / 255.0
-        return img
-
+from dataset import Dataset3DShapes
 
 def main(args):
     # load dataset
     dataset = h5py.File('3dshapes.h5', 'r')
     print(dataset.keys())
     images = dataset['images'][:]
+    images = images.reshape(10, 10, 10, 8, 4, 15, 64, 64, 3)
+    s = [slice(None)] * 6
+    factor_dict = {
+        'floor_hue': 0,
+        'wall_hue': 1,
+        'object_hue': 2,
+        'scale': 3,
+        'shape': 4,
+        'orientation': 5
+    }
+    for factor in args.removed_factors:
+        idx = factor_dict[factor]
+        s[idx] = 0
+    s = tuple(s)
+    images = images[s]
+    images = images.reshape(-1, 64, 64, 3)
     n_samples = images.shape[0]
 
-    # データ分割（8:2）
+    # データ分割（1:7）
     indices = np.arange(n_samples)
     np.random.seed(42)
     np.random.shuffle(indices)
-    split = int(n_samples * 0.8)
-    train_idx, val_idx = indices[:split], indices[split:]
+    split = int(n_samples / 8)
+    val_idx, train_idx = indices[:split], indices[split:]
 
     # Set up model
     torch.manual_seed(0)
 
-    model = Autoencoder()
-
     # LightningModule化
-    pl_model = AutoencoderModule(model, sample_num=args.sample_num)
+    pl_model = AutoencoderModule(
+        num_post_layers=args.num_post_layers,
+        latent_dim=args.latent_dim, 
+        sample_num=args.sample_num
+    )
 
     # DataLoader
-    train_data = Dataset3DShapes(images, train_idx)
-    val_data = Dataset3DShapes(images, val_idx)
+    train_data = Dataset3DShapes(images=images, indices=train_idx)
+    val_data = Dataset3DShapes(images=images, indices=val_idx)
     train_loader = torch.utils.data.DataLoader(
         train_data, batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=args.num_workers)
     val_loader = torch.utils.data.DataLoader(
         val_data, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     # wandb logger
-    wandb_logger = WandbLogger(project=args.project)
+    wandb_logger = WandbLogger(project=args.project, name=args.run_name)
 
     # ModelCheckpointコールバック
     checkpoint_callback = ModelCheckpoint(
-        dirpath=args.ckpt_dir,
+        dirpath=wandb_logger.experiment.dir if type(wandb_logger.experiment.dir) is str else args.ckpt_dir,
         filename="best-{epoch:02d}-{val_loss:.4f}",
         monitor="val_loss",
         save_top_k=1,
@@ -88,13 +92,17 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument('--removed_factors', type=str, nargs='+', default=[], help='Factors to remove from the dataset. Options: floor_hue, wall_hue, object_hue, scale, shape, orientation')
+    parser.add_argument('--num_post_layers', type=int, default=3, help='Number of post-processing layers in the decoder')
+    parser.add_argument('--latent_dim', type=int, default=12, help='Latent dimension')
     parser.add_argument('--batch_size', type=int, default=16000, help='Batch size')
     parser.add_argument('--max_steps', type=int, default=120000, help='Max training steps')
     parser.add_argument('--val_interval', type=int, default=50, help='Validation interval in steps')
     parser.add_argument('--sample_num', type=int, default=64, help='Number of generated images per validation')
     parser.add_argument('--num_workers', type=int, default=16, help='Number of DataLoader workers')
     parser.add_argument('--project', type=str, default='3dshapes-autoencoder', help='wandb project name')
-    parser.add_argument('--ckpt_dir', type=str, default='checkpoints', help='Checkpoint directory')
+    parser.add_argument('--run_name', type=str, default='autoencoder', help='wandb run name')
+    parser.add_argument('--ckpt_dir', type=str, default='checkpoints/autoencoder', help='Checkpoint directory')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     parser.add_argument('--strategy', type=str, default='auto', help='Distributed training strategy (ddp, ddp_spawn, etc)')
     parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes for distributed training')
