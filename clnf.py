@@ -20,8 +20,24 @@ def main(args):
     dataset = h5py.File('3dshapes.h5', 'r')
     print(dataset.keys())
     images = dataset['images'][:]
+    images = images.reshape(10, 10, 10, 8, 4, 15, 64, 64, 3)
+    s = [slice(None)] * 6
+    factor_dict = {
+        'floor_hue': 0,
+        'wall_hue': 1,
+        'object_hue': 2,
+        'scale': 3,
+        'shape': 4,
+        'orientation': 5
+    }
+    for factor in args.removed_factors:
+        idx = factor_dict[factor]
+        s[idx] = 0
+    s = tuple(s)
+    images = images[s]
+    images = images.reshape(-1, 64, 64, 3)
     n_samples = images.shape[0]
-    sample_image = images[12000]
+    sample_image = images[0]
 
     np.random.seed(42)
     torch.manual_seed(0)
