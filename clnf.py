@@ -63,6 +63,7 @@ def main(args):
         sample_num=args.sample_num,
         generator_num=args.generator_num,
         repr_dims=args.repr_dims,
+        predicted_factors=args.predicted_factors,
     )
 
     # DataLoader
@@ -144,6 +145,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--removed_factors', type=str, nargs='+', default=[], help='Factors to remove from the dataset. Options: floor_hue, wall_hue, object_hue, scale, shape, orientation')
+    parser.add_argument('--predicted_factors', type=str, nargs='+', default=[], help='Factors to predict from the dataset. Options: floor_hue, wall_hue, object_hue, scale, shape, orientation')
     
     parser.add_argument('ckpt_predictor', type=str, help='Path to pretrained predictor checkpoint')
     parser.add_argument('ckpt_autoencoder', type=str, help='Path to pretrained autoencoder checkpoint')

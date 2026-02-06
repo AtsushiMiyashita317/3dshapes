@@ -376,6 +376,7 @@ class CLNF(torch.nn.Module):
         normalize_generators=False,
         normalize_precision=False,
         rescale_eps=False,
+        predicted_factors=['scale', 'shape'],
     ):
         super().__init__()
 
@@ -424,6 +425,22 @@ class CLNF(torch.nn.Module):
         self.register_buffer('var_sym', torch.tensor(-1.0))
         self.register_buffer('var_null', torch.tensor(-1.0))
 
+        self.predicted_factors = predicted_factors
+        self.predict_mask = torch.zeros(12, dtype=torch.float32)
+        for factor in predicted_factors:
+            if factor == 'floor_hue':
+                self.predict_mask[0:2] = 1.0
+            elif factor == 'wall_hue':
+                self.predict_mask[2:4] = 1.0
+            elif factor == 'object_hue':
+                self.predict_mask[4:6] = 1.0
+            elif factor == 'scale':
+                self.predict_mask[6:7] = 1.0
+            elif factor == 'shape':
+                self.predict_mask[7:11] = 1.0
+            elif factor == 'orientation':
+                self.predict_mask[11:12] = 1.0
+
     def parameters(self, recurse = True):
         yield from self.flow.parameters(recurse)
         if self.W_sym is not None:
@@ -446,8 +463,11 @@ class CLNF(torch.nn.Module):
         # x: (3, 64, 64)
         # Returns: (output_dim,)
         x = x.unsqueeze(0)
-        _, scale, shape, _ = self.predictor.forward(x)
-        out = torch.cat([scale, shape], dim=-1).squeeze(0)
+        color, scale, shape, orientation = self.predictor.forward(x)
+        color = color.reshape(1, -1)
+        orientation = orientation.unsqueeze(-1)
+        out = torch.cat([color, scale, shape, orientation], dim=-1).squeeze(0)
+        out = out * self.predict_mask.to(out.device)
         return out
 
     def _decode(self, y: torch.Tensor):
@@ -564,7 +584,7 @@ class CLNF(torch.nn.Module):
         z, logdet = self.flow.inverse_and_log_det(y)
         log_prob_data = self.flow.q0.log_prob(z) + logdet  # (B,)
 
-        cv = torch.randn(x.size(0), 5, device=x.device)  # (B, output_dim)
+        cv = torch.randn(x.size(0), 12, device=x.device)  # (B, output_dim)
         cv = self.sample_cotangent(x.detach(), cv)  # (B, input_dim)
         cv_sym = self.encode_cotangent(y, cv.detach())  # (B, input_dim)
         cv_sym = cv_sym.detach()
@@ -640,6 +660,7 @@ class CLNFModule(pl.LightningModule):
         sample_num=64,
         generator_num=16,
         repr_dims=[7, 8, 9, 12],
+        predicted_factors=['scale', 'shape'],
     ):
         super().__init__()
 
@@ -658,6 +679,7 @@ class CLNFModule(pl.LightningModule):
             normalize_generators=normalize_generators,
             normalize_precision=normalize_precision,
             rescale_eps=rescale_eps,
+            predicted_factors=predicted_factors,
         )
 
         self.sample_num = sample_num
