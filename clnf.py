@@ -33,6 +33,9 @@ def main(args):
     for factor in args.removed_factors:
         idx = factor_dict[factor]
         s[idx] = 0
+    for factor in args.cut_factors:
+        idx = factor_dict[factor]
+        s[idx] = slice(0, 7)  # 最初の7つの値を使用
     s = tuple(s)
     images = images[s]
     images = images.reshape(-1, 64, 64, 3)
