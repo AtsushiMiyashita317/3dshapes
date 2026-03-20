@@ -38,5 +38,5 @@ python clnf.py \
     --num_bases_sym ${num_bases_sym} \
     --eps_p_sym ${eps_p_sym} \
     --eps_q_sym ${eps_q_sym} \
-    --removed_factors ${removed_factors} \
+    --cut_factors ${cut_factors} \
     --cut_factors ${cut_factors} \
