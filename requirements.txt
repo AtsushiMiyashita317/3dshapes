@@ -1,8 +1,10 @@
-normflows
+git+https://github.com/AtsushiMiyashita317/normalizing-flows.git
 h5py
 matplotlib
 numpy
-torchvision
+torch==2.6.0
+torchvision==0.21.0
+torchaudio==2.6.0
 tqdm
 pytorch-lightning
 wandb
