@@ -1187,15 +1187,10 @@ class CLNFSupervisedModule(CLNFModule):
             y = y.reshape(y.size(0), -1)
         z, _ = self.model.flow.inverse_and_log_det(y)
 
-        # Pull GT image-space jacobians back to latent space.
-        gt_latent = []
-        for jac in jac_tuple:
-            cv = self.model.encode_cotangent(y, jac.detach())
-            cv = self.model.pullback_cotangent(z, cv)
-            gt_latent.append(cv)
-        gt_latent = torch.stack(gt_latent, dim=1)  # (B, 4, D)
+        # GT vector fields in image space.
+        gt_image = torch.stack([jac.detach() for jac in jac_tuple], dim=1)  # (B, 4, 3, 64, 64)
 
-        # Predicted latent vector-field bases from generators.
+        # Predicted latent vector-field bases from generators (4 factors <-> 4 bases).
         if self.model.W_sym is None:
             raise RuntimeError("W_sym is required for supervised CLNF training.")
         L = (self.model.W_sym - self.model.W_sym.mT) / 2  # (4, D, D)
@@ -1204,8 +1199,17 @@ class CLNFSupervisedModule(CLNFModule):
             L = L / L.size(-1) ** 0.5
         pred_latent = torch.einsum('bi,mji->bmj', z, L)  # (B, 4, D)
 
-        pred_norm = torch.nn.functional.normalize(pred_latent, dim=-1, eps=1e-6)
-        gt_norm = torch.nn.functional.normalize(gt_latent, dim=-1, eps=1e-6)
+        # Pushforward latent vector fields to image space via JVP of decode.
+        pred_image = []
+        for k in range(pred_latent.size(1)):
+            _, tangent = torch.func.jvp(self.model.decode, (z,), (pred_latent[:, k, :],))
+            pred_image.append(tangent)
+        pred_image = torch.stack(pred_image, dim=1)  # (B, 4, 3, 64, 64)
+
+        pred_flat = pred_image.flatten(start_dim=2)
+        gt_flat = gt_image.flatten(start_dim=2)
+        pred_norm = torch.nn.functional.normalize(pred_flat, dim=-1, eps=1e-6)
+        gt_norm = torch.nn.functional.normalize(gt_flat, dim=-1, eps=1e-6)
         cosine = (pred_norm * gt_norm).sum(dim=-1)  # (B, 4)
         loss = (1.0 - cosine).mean()
         cosine_mean = cosine.mean()
